@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 	from ..components.klippy_apis import KlippyAPI as APIComp
 	from ..components.file_manager.file_manager import FileManager
 	from ..components.file_manager.metadata import MetadataStorage
+	from ..components.database import MoonrakerDatabase
+
+DB_NAMESPACE = "moonraker"
+ACTIVE_SPOOL_KEY = "spoolman.spool_id"
 
 
 class AdditionalPrePrintChecks:
@@ -30,6 +34,7 @@ class AdditionalPrePrintChecks:
 		self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
 		self.file_manager: FileManager = self.server.lookup_component("file_manager")
 		self.metadata_storage: MetadataStorage = self.file_manager.get_metadata_storage()
+		self.database: MoonrakerDatabase = self.server.lookup_component("database")
 
 		# Configuration
 		self.weight_margin = self.config.getfloat("weight_margin_grams", 5.0)
@@ -58,45 +63,48 @@ class AdditionalPrePrintChecks:
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		if self.spoolman:
+			await self._init_spool()
 			logging.info("Additional Pre-Print Checks component initialized")
 
-	async def _init_spool_data(self, spool_id: int) -> bool:
+	async def _init_spool(self) -> Optional[int]:
 		"""
-		Initialize and cache spool data for current check session
-
-		Args:
-			spool_id: Spool ID to fetch and cache
+		Get active spool ID from database and initialize/cache spool data.
+		Combines getting active spool ID and initializing spool data functionality.
 
 		Returns:
-			True if spool data successfully cached, False otherwise
+			Spool ID if successful, None if no active spool or fetch failed
 		"""
-		# Check if already cached
-		if self.cached_spool_id == spool_id and self.cached_spool_info is not None:
-			return True
+		if not self.spoolman:
+			return None
 
-		# Fetch spool info
-		self.cached_spool_info = await self._fetch_spool_info(spool_id)
-		if self.cached_spool_info is None:
-			self.cached_spool_id = None
-			return False
+		try:
+			# Get active spool ID from database
+			spool_id = await self.database.get_item(
+				DB_NAMESPACE, ACTIVE_SPOOL_KEY, None
+			)
+			if spool_id is None:
+				return None
 
-		self.cached_spool_id = spool_id
-		return True
+			# Check if already cached
+			if self.cached_spool_id == spool_id and self.cached_spool_info is not None:
+				return spool_id
+
+			# Fetch and cache spool info
+			self.cached_spool_info = await self._fetch_spool_info(spool_id)
+			if self.cached_spool_info is None:
+				self.cached_spool_id = None
+				return None
+
+			self.cached_spool_id = spool_id
+			return spool_id
+		except Exception as e:
+			logging.error(f"Failed to initialize spool data: {e}")
+			return None
 
 	def _clear_spool_cache(self) -> None:
 		"""Clear cached spool data"""
 		self.cached_spool_info = None
 		self.cached_spool_id = None
-
-	async def _get_active_spool_id(self) -> Optional[int]:
-		"""Get currently active spool ID from Spoolman"""
-		if not self.spoolman:
-			return None
-		try:
-			return await self.spoolman.get_active_spool()
-		except Exception as e:
-			logging.error(f"Failed to get active spool ID: {e}")
-			return None
 
 	async def _fetch_spool_info(self, spool_id: int) -> Optional[Dict[str, Any]]:
 		"""Retrieve spool information from Spoolman"""
@@ -156,16 +164,11 @@ class AdditionalPrePrintChecks:
 		if not self.spoolman or not self.enable_weight_check:
 			return True
 
-		# Get active spool ID
-		spool_id = await self._get_active_spool_id()
+		# Get active spool and initialize data
+		spool_id = await self._init_spool()
 		if spool_id is None:
-			await self._log_to_console("No active spool set, skipping weight check", "info")
+			await self._log_to_console("No active spool set or cannot fetch spool info, skipping weight check", "info")
 			return True
-
-		# Initialize spool data
-		if not await self._init_spool_data(spool_id):
-			await self._log_to_console(f"Cannot fetch spool {spool_id} info", "error")
-			return True  # Don't block on fetch errors
 
 		# Get file metadata
 		metadata = self.metadata_storage.get(filename)
@@ -220,15 +223,10 @@ class AdditionalPrePrintChecks:
 		if not self.spoolman or not self.enable_material_check or self.material_mismatch_severity == "ignore":
 			return True
 
-		# Get active spool ID
-		spool_id = await self._get_active_spool_id()
+		# Get active spool and initialize data
+		spool_id = await self._init_spool()
 		if spool_id is None:
-			await self._log_to_console("No active spool set, skipping material check", "info")
-			return True
-
-		# Initialize spool data
-		if not await self._init_spool_data(spool_id):
-			await self._log_to_console(f"Cannot fetch spool {spool_id} info", "error")
+			await self._log_to_console("No active spool set or cannot fetch spool info, skipping material check", "info")
 			return True
 
 		# Get file metadata
@@ -281,15 +279,10 @@ class AdditionalPrePrintChecks:
 		if not self.spoolman or not self.enable_filament_name_check or self.filament_name_mismatch_severity == "ignore":
 			return True
 
-		# Get active spool ID
-		spool_id = await self._get_active_spool_id()
+		# Get active spool and initialize data
+		spool_id = await self._init_spool()
 		if spool_id is None:
-			await self._log_to_console("No active spool set, skipping filament name check", "info")
-			return True
-
-		# Initialize spool data
-		if not await self._init_spool_data(spool_id):
-			await self._log_to_console(f"Cannot fetch spool {spool_id} info", "error")
+			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
 			return True
 
 		# Get file metadata
