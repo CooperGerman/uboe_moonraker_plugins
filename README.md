@@ -44,15 +44,12 @@ Add to your `START_PRINT` macro:
 ```gcode
 [gcode_macro START_PRINT]
 gcode:
-    {% set filename = printer.print_stats.filename %}
-    {% set checks_ok = action_call_remote_method("pre_print_check_all", filename=filename) %}
+    # Run pre-print checks (will pause print if checks fail)
+    { action_call_remote_method("pre_print_checks") }
 
-    {% if not checks_ok %}
-        M117 Pre-print checks failed!
-        CANCEL_PRINT
-    {% endif %}
-
-    # Continue with normal print start...
+    # Continue with normal print start sequence...
+    G28  # Home
+    # ... rest of your start sequence
 ```
 
 ### Requirements

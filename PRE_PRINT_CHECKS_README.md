@@ -32,18 +32,15 @@ filament_name_mismatch_severity: info
 
 ## Remote Methods
 
-### `pre_print_check_weight`
-Check if active spool has sufficient weight for the print.
+### `pre_print_checks`
+Run all enabled pre-print checks on the current print file.
+
+- Automatically retrieves the current filename from Klipper
+- Pauses the print if any check fails with error severity
+- No parameters or return values needed
 
 ```gcode
-{% set weight_ok = action_call_remote_method("pre_print_check_weight", filename=printer.print_stats.filename) %}
-```
-
-### `pre_print_check_all`
-Run all enabled checks in one call (recommended).
-
-```gcode
-{% set all_checks_ok = action_call_remote_method("pre_print_check_all", filename=printer.print_stats.filename) %}
+{ action_call_remote_method("pre_print_checks") }
 ```
 
 ## Usage Example
@@ -53,47 +50,38 @@ Add to your `START_PRINT` macro:
 ```gcode
 [gcode_macro START_PRINT]
 gcode:
-    # Get filename
-    {% set filename = printer.print_stats.filename %}
-
     # Run all pre-print checks
-    {% set checks_ok = action_call_remote_method("pre_print_check_all", filename=filename) %}
+    # Plugin will automatically pause print if checks fail
+    { action_call_remote_method("pre_print_checks") }
 
-    {% if not checks_ok %}
-        M117 Pre-print checks failed!
-        CANCEL_PRINT
-    {% endif %}
-
-    # Continue with normal print start sequence...
+    # Continue with normal print start sequence
     M117 Starting print
     G28  # Home
     # ... rest of your start sequence
 ```
 
-## Check Behavior
-
-### Weight Check
-- Reads `filament_weight_total` from gcode metadata
-- Compares against `remaining_weight` in active Spoolman spool
-- Adds configurable safety margin
-- **Blocks** if insufficient weight (always error severity)
+**Note:** The plugin automatically:
+- Retrieves the current filename from Klipper's print_stats
+- Runs all enabled checks
+- Pauses the print if any check fails with error severity
+- Logs all results to console and moonraker.log
+- **Always error severity** - pauses print if insufficient weight
 
 ### Material Check
 - Reads `filament_type` from gcode metadata (first entry)
 - Compares against spool's `material` field (case-insensitive)
-- Severity configurable: error, warning, info, or ignore
+- Severity configurable: error (pause), warning, info, or ignore
 
 ### Filament Name Check
 - Reads `filament_name` from gcode metadata (first entry)
 - Compares against spool's `name` field (case-insensitive)
-- Severity configurable: error, warning, info, or ignore
+- Severity configurable: error (pause), warning, info, or ignore
 - Useful for ensuring correct vendor/profile loaded
 
-## Requirements
-
-- Moonraker with Spoolman component configured
-- Active spool set in Spoolman
-- Gcode files with proper slicer metadata
+**Automatic Actions:**
+- All checks run automatically when `pre_print_checks` is called
+- Print is paused if any check fails with error severity
+- Warnings and info messages are logged but don't block the print
 
 ## Metadata Requirements
 
@@ -108,9 +96,9 @@ If metadata is missing, the respective check is skipped gracefully.
 
 | Level | Behavior |
 |-------|----------|
-| `error` | Blocks print, returns False |
-| `warning` | Logs warning, allows print, returns True |
-| `info` | Logs info message, allows print, returns True |
+| `error` | Pauses print immediately, logs error message |
+| `warning` | Logs warning message, allows print to continue |
+| `info` | Logs info message, allows print to continue |
 | `ignore` | Skips check entirely |
 
 ## Logging

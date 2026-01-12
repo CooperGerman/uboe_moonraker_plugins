@@ -53,12 +53,8 @@ class AdditionalPrePrintChecks:
 		# Register remote methods
 		if self.spoolman:
 			self.server.register_remote_method(
-					"pre_print_check_weight",
-					self.check_print_weight
-			)
-			self.server.register_remote_method(
-					"pre_print_check_all",
-					self.check_all
+				"pre_print_checks",
+				self.run_checks
 			)
 			logging.info("Additional Pre-Print Checks: Enabled")
 		else:
@@ -128,6 +124,21 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Exception fetching spool info: {e}")
 			return None
 
+async def _get_current_filename(self) -> Optional[str]:
+	"""
+	Get the currently printing or selected filename from Klipper
+
+	Returns:
+		Filename or None if not available
+	"""
+	try:
+		result = await self.klippy_apis.query_objects({'print_stats': None})
+		filename = result.get('print_stats', {}).get('filename')
+		return filename if filename else None
+	except Exception as e:
+		logging.error(f"Failed to get current filename: {e}")
+		return None
+
 	async def _log_to_console(self, msg: str, severity: str = "info") -> None:
 		"""
 		Send message to Klipper console with appropriate severity
@@ -157,7 +168,7 @@ class AdditionalPrePrintChecks:
 			filename: Path to gcode file (e.g., "gcodes/test.gcode")
 
 		Returns:
-			True if sufficient weight available or check not applicable, False otherwise
+			True if check passed or not applicable, False if failed
 		"""
 		if not self.spoolman or not self.enable_weight_check:
 			return True
@@ -335,18 +346,23 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(msg, self.filament_name_mismatch_severity)
 			return self.filament_name_mismatch_severity != "error"
 
-	async def check_all(self, filename: str) -> bool:
+async def run_checks(self) -> None:
 		"""
-		Run all enabled pre-print checks
-
-		Args:
-			filename: Path to gcode file
-
-		Returns:
-			True if all checks pass, False if any check fails with error severity
+		Run all enabled pre-print checks on the current print file.
+		Pauses print if any check fails with error severity.
+		Called automatically from Klipper macro without parameters.
 		"""
 		if not self.spoolman:
-			return True
+			await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
+			return
+
+		# Get current filename from Klipper
+		filename = await self._get_current_filename()
+		if not filename:
+			await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
+			return
+
+		await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
 
 		# Clear cache at start of check session
 		self._clear_spool_cache()
@@ -360,12 +376,18 @@ class AdditionalPrePrintChecks:
 			all_ok = weight_ok and material_ok and filament_name_ok
 
 			if all_ok:
-				await self._log_to_console("All pre-print checks PASSED", "info")
+				await self._log_to_console("✓ All pre-print checks PASSED", "info")
 			else:
-				await self._log_to_console("Some pre-print checks FAILED", "error")
-
-			return all_ok
+				await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
+				# Pause the print
+				try:
+					await self.klippy_apis.pause_print()
+				except Exception as e:
+					logging.error(f"Failed to pause print: {e}")
 		finally:
 			# Clear cache after checks complete
 			self._clear_spool_cache()
 
+
+def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
+	return AdditionalPrePrintChecks(config)
