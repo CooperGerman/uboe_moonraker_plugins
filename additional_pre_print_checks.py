@@ -75,7 +75,9 @@ class AdditionalPrePrintChecks:
 
 	def _is_mmu_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
-		return self.mmu_server._mmu_backend_enabled()
+		if self.mmu_server is None:
+			return False
+		return self.mmu_server._init_mmu_backend()
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
