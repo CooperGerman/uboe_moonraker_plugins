@@ -53,6 +53,10 @@ class AdditionalPrePrintChecks:
 		self.cached_spool_info: Optional[Dict[str, Any]] = None
 		self.cached_spool_id: Optional[int] = None
 
+		# Init mmu_server component
+		if config.has_section("mmu_server"):
+			self.mmu_server = self.server.load_component(config, "mmu_server", None)
+
 		# Register remote methods
 		if self.spoolman:
 			self.server.register_remote_method(
@@ -71,13 +75,7 @@ class AdditionalPrePrintChecks:
 
 	def _is_mmu_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
-		# Load mmu_server if available
-		self.mmu_server = self.server.lookup_component("mmu_server", None)
-		if not self.mmu_server:
-			logging.info("MMU server component not available")
-			return False
-		logging.info(f"MMU server backend enabled: {self.mmu_server._init_mmu_backend()}")
-		return self.mmu_server._init_mmu_backend()
+		return self.mmu_server._mmu_backend_enabled()
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
