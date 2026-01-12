@@ -12,13 +12,9 @@ from typing import TYPE_CHECKING, Dict, Any, Optional
 if TYPE_CHECKING:
 	from ..components.spoolman import SpoolManager
 	from ..confighelper import ConfigHelper
-	from ..components.http_client import HttpClient
-	from ..components.database import MoonrakerDatabase
 	from ..components.klippy_apis import KlippyAPI as APIComp
 	from ..components.file_manager.file_manager import FileManager
-
-DB_NAMESPACE = "moonraker"
-ACTIVE_SPOOL_KEY = "spoolman.spool_id"
+	from ..components.file_manager.metadata import MetadataStorage
 
 
 class AdditionalPrePrintChecks:
@@ -32,9 +28,8 @@ class AdditionalPrePrintChecks:
 			self.spoolman = self.server.load_component(config, "spoolman", None)
 
 		self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
-		self.http_client: HttpClient = self.server.lookup_component("http_client")
-		self.database: MoonrakerDatabase = self.server.lookup_component("database")
 		self.file_manager: FileManager = self.server.lookup_component("file_manager")
+		self.metadata_storage: MetadataStorage = self.file_manager.get_metadata_storage()
 
 		# Configuration
 		self.weight_margin = self.config.getfloat("weight_margin_grams", 5.0)
@@ -94,10 +89,11 @@ class AdditionalPrePrintChecks:
 		self.cached_spool_id = None
 
 	async def _get_active_spool_id(self) -> Optional[int]:
-		"""Get currently active spool ID from database"""
+		"""Get currently active spool ID from Spoolman"""
+		if not self.spoolman:
+			return None
 		try:
-			result = await self.database.get_item(DB_NAMESPACE, ACTIVE_SPOOL_KEY)
-			return int(result) if result is not None else None
+			return await self.spoolman.get_active_spool()
 		except Exception as e:
 			logging.error(f"Failed to get active spool ID: {e}")
 			return None
@@ -105,39 +101,26 @@ class AdditionalPrePrintChecks:
 	async def _fetch_spool_info(self, spool_id: int) -> Optional[Dict[str, Any]]:
 		"""Retrieve spool information from Spoolman"""
 		try:
-			response = await self.http_client.request(
-					method="GET",
-					url=f'{self.spoolman.spoolman_url}/v1/spool/{spool_id}',
-					body=None
-			)
-
-			if response.status_code == 404:
-					logging.error(f"Spool {spool_id} not found in Spoolman")
-					return None
-			elif response.has_error():
-					err_msg = self.spoolman._get_response_error(response)
-					logging.error(f"Failed to fetch spool info: {err_msg}")
-					return None
-
-			return response.json()
+			spool_info = await self.spoolman.get_spool(spool_id)
+			return spool_info
 		except Exception as e:
-			logging.error(f"Exception fetching spool info: {e}")
+			logging.error(f"Failed to fetch spool {spool_id}: {e}")
 			return None
 
-async def _get_current_filename(self) -> Optional[str]:
-	"""
-	Get the currently printing or selected filename from Klipper
+	async def _get_current_filename(self) -> Optional[str]:
+		"""
+		Get the currently printing or selected filename from Klipper
 
-	Returns:
-		Filename or None if not available
-	"""
-	try:
-		result = await self.klippy_apis.query_objects({'print_stats': None})
-		filename = result.get('print_stats', {}).get('filename')
-		return filename if filename else None
-	except Exception as e:
-		logging.error(f"Failed to get current filename: {e}")
-		return None
+		Returns:
+			Filename or None if not available
+		"""
+		try:
+			result = await self.klippy_apis.query_objects({'print_stats': None})
+			filename = result.get('print_stats', {}).get('filename')
+			return filename if filename else None
+		except Exception as e:
+			logging.error(f"Failed to get current filename: {e}")
+			return None
 
 	async def _log_to_console(self, msg: str, severity: str = "info") -> None:
 		"""
@@ -185,11 +168,10 @@ async def _get_current_filename(self) -> Optional[str]:
 			return True  # Don't block on fetch errors
 
 		# Get file metadata
-		try:
-			metadata = self.file_manager.get_file_metadata(filename)
-		except Exception as e:
-			logging.error(f"Failed to get metadata for {filename}: {e}")
-			await self._log_to_console(f"Cannot read file metadata: {e}", "error")
+		metadata = self.metadata_storage.get(filename)
+		if metadata is None:
+			logging.error(f"Metadata not available for {filename}")
+			await self._log_to_console(f"No metadata available for {filename}", "error")
 			return True
 
 		# Extract required weight from metadata
@@ -250,10 +232,10 @@ async def _get_current_filename(self) -> Optional[str]:
 			return True
 
 		# Get file metadata
-		try:
-			metadata = self.file_manager.get_file_metadata(filename)
-		except Exception as e:
-			logging.error(f"Failed to get metadata for {filename}: {e}")
+		metadata = self.metadata_storage.get(filename)
+		if metadata is None:
+			logging.error(f"Metadata not available for {filename}")
+			await self._log_to_console(f"No metadata available for {filename}", "error")
 			return True
 
 		# Extract material from metadata (first material in list)
@@ -311,10 +293,10 @@ async def _get_current_filename(self) -> Optional[str]:
 			return True
 
 		# Get file metadata
-		try:
-			metadata = self.file_manager.get_file_metadata(filename)
-		except Exception as e:
-			logging.error(f"Failed to get metadata for {filename}: {e}")
+		metadata = self.metadata_storage.get(filename)
+		if metadata is None:
+			logging.error(f"Metadata not available for {filename}")
+			await self._log_to_console(f"No metadata available for {filename}", "error")
 			return True
 
 		# Extract filament name from metadata (first name in list)
@@ -346,47 +328,51 @@ async def _get_current_filename(self) -> Optional[str]:
 			await self._log_to_console(msg, self.filament_name_mismatch_severity)
 			return self.filament_name_mismatch_severity != "error"
 
-async def run_checks(self) -> None:
-		"""
-		Run all enabled pre-print checks on the current print file.
-		Pauses print if any check fails with error severity.
-		Called automatically from Klipper macro without parameters.
-		"""
-		if not self.spoolman:
-			await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
-			return
+	async def run_checks(self) -> None:
+			"""
+			Run all enabled pre-print checks on the current print file.
+			Pauses print if any check fails with error severity.
+			Called automatically from Klipper macro without parameters.
+			"""
+			logging.info("Starting Additional Pre-Print Checks...")
+			if not self.spoolman:
+				logging.warning("Spoolman component not available, skipping checks")
+				await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
+				return
 
-		# Get current filename from Klipper
-		filename = await self._get_current_filename()
-		if not filename:
-			await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
-			return
+			# Get current filename from Klipper
+			filename = await self._get_current_filename()
+			if not filename:
+				logging.warning("No current filename available, skipping checks")
+				await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
+				return
 
-		await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
+			logging.info(f"Running pre-print checks for file: {filename}")
+			await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
 
-		# Clear cache at start of check session
-		self._clear_spool_cache()
-
-		try:
-			# Run all checks
-			weight_ok = await self.check_print_weight(filename)
-			material_ok = await self.check_material_compliance(filename)
-			filament_name_ok = await self.check_filament_name_compliance(filename)
-
-			all_ok = weight_ok and material_ok and filament_name_ok
-
-			if all_ok:
-				await self._log_to_console("✓ All pre-print checks PASSED", "info")
-			else:
-				await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
-				# Pause the print
-				try:
-					await self.klippy_apis.pause_print()
-				except Exception as e:
-					logging.error(f"Failed to pause print: {e}")
-		finally:
-			# Clear cache after checks complete
+			# Clear cache at start of check session
 			self._clear_spool_cache()
+
+			try:
+				# Run all checks
+				weight_ok = await self.check_print_weight(filename)
+				material_ok = await self.check_material_compliance(filename)
+				filament_name_ok = await self.check_filament_name_compliance(filename)
+
+				all_ok = weight_ok and material_ok and filament_name_ok
+
+				if all_ok:
+					await self._log_to_console("✓ All pre-print checks PASSED", "info")
+				else:
+					await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
+					# Pause the print
+					try:
+						await self.klippy_apis.pause_print()
+					except Exception as e:
+						logging.error(f"Failed to pause print: {e}")
+			finally:
+				# Clear cache after checks complete
+				self._clear_spool_cache()
 
 
 def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
