@@ -223,7 +223,7 @@ class AdditionalPrePrintChecks:
 			msg = (f"Weight Check PASSED: Spool {spool_id} ({filament_name}) "
 						f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
 						f"(+{self.weight_margin:.1f}g margin)")
-			await self._log_to_console(msg, "info")
+			logging.info(msg)
 			return True
 		else:
 			deficit = required_with_margin - remaining_weight
@@ -253,101 +253,113 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(f"No metadata available for {filename}", "error")
 			return True
 
-		# Get referenced tools from metadata
-		referenced_tools = metadata.get('referenced_tools')
-		if not referenced_tools:
-			await self._log_to_console("No referenced tools in metadata, skipping MMU checks", "info")
-			return True
-
 		# Extract per-tool arrays from metadata
 		filament_weights = metadata.get('filament_weights', [])
-		filament_type_str = metadata.get('filament_type', '')
-		filament_types = filament_type_str.split(';') if filament_type_str else []
-		filament_name_str = metadata.get('filament_name', '')
-		filament_names = filament_name_str.split(';') if filament_name_str else []
-
-		await self._log_to_console(f"Checking {len(referenced_tools)} tools: {referenced_tools}", "info")
+		filament_types = metadata.get('filament_type', [])
+		filament_types = [filament_types] if isinstance(filament_types, str) else filament_types
+		filament_names = metadata.get('filament_name', [])
+		filament_names = [filament_names] if isinstance(filament_names, str) else filament_names
+		logging.info(f"MMU Print Metadata - Weights: {filament_weights}, Types: {filament_types}, Names: {filament_names}")
 
 		# Refresh mmu_server cache to get current gate map
 		await self.mmu_server.refresh_cache(silent=True)
-		printer_hostname = self.mmu_server.printer_hostname
 
-		all_checks_passed = True
+		# get tool to gate map from mmu backend config (example result : [2, 1, 2, 3, 4, 5, 6, 7, 8])
+		# tool (index 0) mapped to gate 2, tool (index 1) mapped to gate 1, etc.
+		ttg_map = self.mmu_server.mmu_backend_config.get('mmu', {}).get('ttg_map', False)
+		gate_spool_id = self.mmu_server.mmu_backend_config.get('mmu', {}).get('gate_spool_id', False)
 
-		# Check each referenced tool
-		for tool_idx in referenced_tools:
-			# Find spool assigned to this gate (tool_idx == gate_number in Happy Hare)
-			spool_id = self.mmu_server._find_first_spool_id(printer_hostname, tool_idx)
+		logging.info(f"Tool to Gate Map: {ttg_map}")
+		logging.info(f"Gate to Spool Map: {gate_spool_id}")
 
-			if spool_id < 0:
-				if self.enable_weight_check:
-					msg = f"Tool {tool_idx}: No spool assigned to gate {tool_idx}"
-					await self._log_to_console(msg, "error")
-					all_checks_passed = False
-				else:
-					msg = f"Tool {tool_idx}: No spool assigned (checks disabled)"
-					await self._log_to_console(msg, "warning")
+		all_ok = True
+		# go through each filament used in the print and check the assigned gate and thus
+		# the spool on which to check the name and weight
+		for tool_index in range(len(filament_weights)):
+			# Get assigned gate for tool
+			if tool_index >= len(ttg_map):
+				logging.error(f"Tool index {tool_index} out of range in tool-to-gate map")
+				continue
+			gate_number = ttg_map[tool_index]
+
+			# Get assigned spool for gate
+			spool_id = gate_spool_id[gate_number] if gate_number < len(gate_spool_id) else None
+			if spool_id is None:
+				await self._log_to_console(f"No spool assigned to gate {gate_number} for tool {tool_index}, skipping checks", "warning")
 				continue
 
-			# Fetch spool info
-			spool_info = await self.mmu_server._fetch_spool_info(spool_id)
-			if not spool_info:
-				msg = f"Tool {tool_idx}: Failed to fetch info for spool {spool_id}"
-				await self._log_to_console(msg, "error")
-				all_checks_passed = False
+			# Fetch and cache spool info
+			self.cached_spool_info = await self._fetch_spool_info(spool_id)
+			if self.cached_spool_info is None:
+				await self._log_to_console(f"Cannot fetch spool {spool_id} info for tool {tool_index}, skipping checks", "error")
+				all_ok = False
 				continue
 
-			filament = spool_info.get('filament', {})
-			spool_name = filament.get('name', 'Unknown')
-			spool_material = filament.get('material', '').strip()
-			remaining_weight = spool_info.get('remaining_weight')
-
-			# Weight check
-			if self.enable_weight_check and tool_idx < len(filament_weights):
-				required_weight = filament_weights[tool_idx]
-				if required_weight and remaining_weight is not None:
+			# Check weight
+			required_weight = filament_weights[tool_index]
+			weight_ok = True
+			if self.enable_weight_check and required_weight is not None:
+				remaining_weight = self.cached_spool_info.get('remaining_weight')
+				if remaining_weight is not None:
 					required_with_margin = required_weight + self.weight_margin
-					if remaining_weight >= required_with_margin:
-						msg = (f"Tool {tool_idx} [{spool_name}]: Weight OK "
-								 f"({remaining_weight:.1f}g >= {required_weight:.1f}g + {self.weight_margin:.1f}g)")
-						await self._log_to_console(msg, "info")
+					weight_ok = remaining_weight >= required_with_margin
+
+					filament = self.cached_spool_info.get('filament', {})
+					filament_name = filament.get('name', 'Unknown')
+
+					if weight_ok:
+						msg = (f"Tool {tool_index} Weight Check PASSED: Spool {spool_id} ({filament_name}) "
+									f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
+									f"(+{self.weight_margin:.1f}g margin)")
+						logging.info(msg)
 					else:
 						deficit = required_with_margin - remaining_weight
-						msg = (f"Tool {tool_idx} [{spool_name}]: INSUFFICIENT WEIGHT - "
-								 f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
-								 f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
+						msg = (f"Tool {tool_index} Weight Check FAILED: Spool {spool_id} ({filament_name}) "
+									f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
+									f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
 						await self._log_to_console(msg, "error")
-						all_checks_passed = False
+						weight_ok = False
+			# Check material
+			material_ok = True
+			if self.enable_material_check and tool_index < len(filament_types):
+				metadata_material = filament_types[tool_index].strip()
+				spool_material = self.cached_spool_info.get('filament', {}).get('material', '').strip()
 
-			# Material check
-			if self.enable_material_check and tool_idx < len(filament_types):
-				expected_material = filament_types[tool_idx].strip()
-				if expected_material and spool_material:
-					if spool_material.lower() == expected_material.lower():
-						msg = f"Tool {tool_idx} [{spool_name}]: Material OK ({spool_material})"
-						await self._log_to_console(msg, "info")
+				if not spool_material:
+					await self._log_to_console(f"Tool {tool_index} Spool {spool_id} has no material data, skipping material check", "info")
+				else:
+					material_ok = spool_material.lower() == metadata_material.lower()
+					if material_ok:
+						msg = (f"Tool {tool_index} Material Check PASSED: Spool {spool_id} material '{spool_material}' matches")
+						logging.info(msg)
 					else:
-						msg = (f"Tool {tool_idx} [{spool_name}]: Material mismatch - "
-								 f"has '{spool_material}' but expects '{expected_material}'")
+						msg = (f"Tool {tool_index} Material Check FAILED: Spool {spool_id} "
+									f"has material '{spool_material}' but gcode expects '{metadata_material}'")
 						await self._log_to_console(msg, self.material_mismatch_severity)
 						if self.material_mismatch_severity == "error":
-							all_checks_passed = False
+							material_ok = False
+			# Check filament name
+			filament_name_ok = True
+			if self.enable_filament_name_check and tool_index < len(filament_names):
+				metadata_filament_name = filament_names[tool_index].strip()
+				spool_filament_name = self.cached_spool_info.get('filament', {}).get('name', '').strip()
 
-			# Filament name check
-			if self.enable_filament_name_check and tool_idx < len(filament_names):
-				expected_name = filament_names[tool_idx].strip()
-				if expected_name and spool_name:
-					if spool_name.lower() == expected_name.lower():
-						msg = f"Tool {tool_idx}: Name OK ({spool_name})"
-						await self._log_to_console(msg, "info")
+				if not spool_filament_name:
+					await self._log_to_console(f"Tool {tool_index} Spool {spool_id} has no filament name data, skipping name check", "info")
+				else:
+					filament_name_ok = spool_filament_name.lower() == metadata_filament_name.lower()
+					if filament_name_ok:
+						msg = (f"Tool {tool_index} Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches")
+						logging.info(msg)
 					else:
-						msg = (f"Tool {tool_idx}: Name mismatch - "
-								 f"has '{spool_name}' but expects '{expected_name}'")
+						msg = (f"Tool {tool_index} Filament Name Check FAILED: Spool {spool_id} "
+									f"has name '{spool_filament_name}' but gcode expects '{metadata_filament_name}'")
 						await self._log_to_console(msg, self.filament_name_mismatch_severity)
 						if self.filament_name_mismatch_severity == "error":
-							all_checks_passed = False
-
-		return all_checks_passed
+							filament_name_ok = False
+			if not (weight_ok and material_ok and filament_name_ok):
+				all_ok = False
+		return all_ok
 
 	async def check_filament_name_compliance(self, filename: str) -> bool:
 		"""
@@ -400,7 +412,7 @@ class AdditionalPrePrintChecks:
 
 		if compliant:
 			msg = f"Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches"
-			await self._log_to_console(msg, "info")
+			logging.info(msg)
 			return True
 		else:
 			msg = (f"Filament Name Check FAILED: Spool {spool_id} "
