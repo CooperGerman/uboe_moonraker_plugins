@@ -7,10 +7,12 @@
 from __future__ import annotations
 import logging
 import asyncio
-from typing import TYPE_CHECKING, Dict, Any, Optional
+from logging import config
+from typing import TYPE_CHECKING, Dict, Any, Optional, List
 
 if TYPE_CHECKING:
 	from ..components.spoolman import SpoolManager
+	from ..components.mmu_server import MmuServer
 	from ..confighelper import ConfigHelper
 	from ..components.klippy_apis import KlippyAPI as APIComp
 	from ..components.file_manager.file_manager import FileManager
@@ -26,6 +28,7 @@ class AdditionalPrePrintChecks:
 		self.config = config
 		self.server = config.get_server()
 		self.spoolman: Optional[SpoolManager] = None
+		self.mmu_server: Optional[MmuServer] = None
 
 		# Load components
 		if config.has_section("spoolman"):
@@ -65,6 +68,16 @@ class AdditionalPrePrintChecks:
 		if self.spoolman:
 			await self._init_spool()
 			logging.info("Additional Pre-Print Checks component initialized")
+
+	def _is_mmu_enabled(self) -> bool:
+		"""Check if MMU backend is present and enabled"""
+		# Load mmu_server if available
+		self.mmu_server = self.server.lookup_component("mmu_server", None)
+		if not self.mmu_server:
+			logging.info("MMU server component not available")
+			return False
+		logging.info(f"MMU server backend enabled: {self.mmu_server._init_mmu_backend()}")
+		return self.mmu_server._init_mmu_backend()
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
@@ -220,6 +233,122 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(msg, "error")
 			return False
 
+	async def check_mmu_tools(self, filename: str) -> bool:
+		"""
+		Check all tools used in MMU print against their assigned spools
+
+		Args:
+			filename: Path to gcode file
+
+		Returns:
+			True if all checks passed, False if any critical check failed
+		"""
+		if not self.spoolman or not self.mmu_server:
+			return True
+
+		# Get file metadata
+		metadata = self.metadata_storage.get(filename)
+		if metadata is None:
+			logging.error(f"Metadata not available for {filename}")
+			await self._log_to_console(f"No metadata available for {filename}", "error")
+			return True
+
+		# Get referenced tools from metadata
+		referenced_tools = metadata.get('referenced_tools')
+		if not referenced_tools:
+			await self._log_to_console("No referenced tools in metadata, skipping MMU checks", "info")
+			return True
+
+		# Extract per-tool arrays from metadata
+		filament_weights = metadata.get('filament_weights', [])
+		filament_type_str = metadata.get('filament_type', '')
+		filament_types = filament_type_str.split(';') if filament_type_str else []
+		filament_name_str = metadata.get('filament_name', '')
+		filament_names = filament_name_str.split(';') if filament_name_str else []
+
+		await self._log_to_console(f"Checking {len(referenced_tools)} tools: {referenced_tools}", "info")
+
+		# Refresh mmu_server cache to get current gate map
+		await self.mmu_server.refresh_cache(silent=True)
+		printer_hostname = self.mmu_server.printer_hostname
+
+		all_checks_passed = True
+
+		# Check each referenced tool
+		for tool_idx in referenced_tools:
+			# Find spool assigned to this gate (tool_idx == gate_number in Happy Hare)
+			spool_id = self.mmu_server._find_first_spool_id(printer_hostname, tool_idx)
+
+			if spool_id < 0:
+				if self.enable_weight_check:
+					msg = f"Tool {tool_idx}: No spool assigned to gate {tool_idx}"
+					await self._log_to_console(msg, "error")
+					all_checks_passed = False
+				else:
+					msg = f"Tool {tool_idx}: No spool assigned (checks disabled)"
+					await self._log_to_console(msg, "warning")
+				continue
+
+			# Fetch spool info
+			spool_info = await self.mmu_server._fetch_spool_info(spool_id)
+			if not spool_info:
+				msg = f"Tool {tool_idx}: Failed to fetch info for spool {spool_id}"
+				await self._log_to_console(msg, "error")
+				all_checks_passed = False
+				continue
+
+			filament = spool_info.get('filament', {})
+			spool_name = filament.get('name', 'Unknown')
+			spool_material = filament.get('material', '').strip()
+			remaining_weight = spool_info.get('remaining_weight')
+
+			# Weight check
+			if self.enable_weight_check and tool_idx < len(filament_weights):
+				required_weight = filament_weights[tool_idx]
+				if required_weight and remaining_weight is not None:
+					required_with_margin = required_weight + self.weight_margin
+					if remaining_weight >= required_with_margin:
+						msg = (f"Tool {tool_idx} [{spool_name}]: Weight OK "
+								 f"({remaining_weight:.1f}g >= {required_weight:.1f}g + {self.weight_margin:.1f}g)")
+						await self._log_to_console(msg, "info")
+					else:
+						deficit = required_with_margin - remaining_weight
+						msg = (f"Tool {tool_idx} [{spool_name}]: INSUFFICIENT WEIGHT - "
+								 f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
+								 f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
+						await self._log_to_console(msg, "error")
+						all_checks_passed = False
+
+			# Material check
+			if self.enable_material_check and tool_idx < len(filament_types):
+				expected_material = filament_types[tool_idx].strip()
+				if expected_material and spool_material:
+					if spool_material.lower() == expected_material.lower():
+						msg = f"Tool {tool_idx} [{spool_name}]: Material OK ({spool_material})"
+						await self._log_to_console(msg, "info")
+					else:
+						msg = (f"Tool {tool_idx} [{spool_name}]: Material mismatch - "
+								 f"has '{spool_material}' but expects '{expected_material}'")
+						await self._log_to_console(msg, self.material_mismatch_severity)
+						if self.material_mismatch_severity == "error":
+							all_checks_passed = False
+
+			# Filament name check
+			if self.enable_filament_name_check and tool_idx < len(filament_names):
+				expected_name = filament_names[tool_idx].strip()
+				if expected_name and spool_name:
+					if spool_name.lower() == expected_name.lower():
+						msg = f"Tool {tool_idx}: Name OK ({spool_name})"
+						await self._log_to_console(msg, "info")
+					else:
+						msg = (f"Tool {tool_idx}: Name mismatch - "
+								 f"has '{spool_name}' but expects '{expected_name}'")
+						await self._log_to_console(msg, self.filament_name_mismatch_severity)
+						if self.filament_name_mismatch_severity == "error":
+							all_checks_passed = False
+
+		return all_checks_passed
+
 	async def check_filament_name_compliance(self, filename: str) -> bool:
 		"""
 		Check if active spool filament name matches metadata filament name
@@ -282,6 +411,7 @@ class AdditionalPrePrintChecks:
 	async def run_checks(self) -> None:
 		"""
 		Run all enabled pre-print checks on the current print file.
+		Auto-detects MMU mode and runs appropriate checks.
 		Pauses print if any check fails with error severity.
 		Called automatically from Klipper macro without parameters.
 		"""
@@ -298,18 +428,24 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
 			return
 
-		logging.info(f"Running pre-print checks for file: {filename}")
-		await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
+		# Check if MMU mode
+		is_mmu = self._is_mmu_enabled()
+		mode = "MMU multi-tool" if is_mmu else "Single-spool"
+		logging.info(f"Running {mode} pre-print checks for file: {filename}")
+		await self._log_to_console(f"Running {mode} checks for: {filename}", "info")
 
 		# Clear cache at start of check session
 		self._clear_spool_cache()
 
 		try:
-			# Run all checks
-			weight_ok = await self.check_print_weight(filename)
-			filament_name_ok = await self.check_filament_name_compliance(filename)
-
-			all_ok = weight_ok and filament_name_ok
+			if is_mmu:
+				# MMU mode: check all referenced tools
+				all_ok = await self.check_mmu_tools(filename)
+			else:
+				# Single-spool mode: check active spool
+				weight_ok = await self.check_print_weight(filename)
+				filament_name_ok = await self.check_filament_name_compliance(filename)
+				all_ok = weight_ok and filament_name_ok
 
 			if all_ok:
 				await self._log_to_console("✓ All pre-print checks PASSED", "info")
