@@ -248,11 +248,15 @@ class AdditionalPrePrintChecks:
 
 		# Extract filament name from metadata (first name in list)
 		metadata_filament_names = metadata.get('filament_name')
-		if not metadata_filament_names or not isinstance(metadata_filament_names, list) or len(metadata_filament_names) == 0:
+		if not metadata_filament_names:
 			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
 			return True
 
-		metadata_filament_name = metadata_filament_names[0].strip()
+		# if return value is a list and has at least one entry
+		if isinstance(metadata_filament_names, list):
+			metadata_filament_name = metadata_filament_names[0].strip()
+		else:
+			metadata_filament_name = metadata_filament_names.strip()
 
 		# Get spool filament name
 		filament = self.cached_spool_info.get('filament', {})
