@@ -107,10 +107,20 @@ class AdditionalPrePrintChecks:
 		self.cached_spool_id = None
 
 	async def _fetch_spool_info(self, spool_id: int) -> Optional[Dict[str, Any]]:
-		"""Retrieve spool information from Spoolman"""
+		"""Retrieve spool information from Spoolman (same method as mmu_server)"""
 		try:
-			spool_info = await self.spoolman.get_spool(spool_id)
-			return spool_info
+			response = await self.spoolman.http_client.request(
+				method="GET",
+				url=f'{self.spoolman.spoolman_url}/v1/spool/{spool_id}',
+				body=None
+			)
+			if response.status_code == 404:
+				logging.error(f"Spool {spool_id} not found in Spoolman")
+				return None
+			elif response.has_error():
+				logging.error(f"Error fetching spool {spool_id}: HTTP {response.status_code}")
+				return None
+			return response.json()
 		except Exception as e:
 			logging.error(f"Failed to fetch spool {spool_id}: {e}")
 			return None
@@ -210,62 +220,6 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(msg, "error")
 			return False
 
-	async def check_material_compliance(self, filename: str) -> bool:
-		"""
-		Check if active spool material matches metadata material
-
-		Args:
-			filename: Path to gcode file
-
-		Returns:
-			True if compliant or check not applicable, False if error severity and mismatch
-		"""
-		if not self.spoolman or not self.enable_material_check or self.material_mismatch_severity == "ignore":
-			return True
-
-		# Get active spool and initialize data
-		spool_id = await self._init_spool()
-		if spool_id is None:
-			await self._log_to_console("No active spool set or cannot fetch spool info, skipping material check", "info")
-			return True
-
-		# Get file metadata
-		metadata = self.metadata_storage.get(filename)
-		if metadata is None:
-			logging.error(f"Metadata not available for {filename}")
-			await self._log_to_console(f"No metadata available for {filename}", "error")
-			return True
-
-		# Extract material from metadata (first material in list)
-		metadata_materials = metadata.get('filament_type')
-		if not metadata_materials or not isinstance(metadata_materials, list) or len(metadata_materials) == 0:
-			await self._log_to_console("No material data in file metadata, skipping check", "info")
-			return True
-
-		metadata_material = metadata_materials[0].upper().strip()
-
-		# Get spool material
-		filament = self.cached_spool_info.get('filament', {})
-		spool_material = filament.get('material', '').upper().strip()
-		filament_name = filament.get('name', 'Unknown')
-
-		if not spool_material:
-			await self._log_to_console("Spool has no material data, skipping check", "info")
-			return True
-
-		# Check compliance
-		compliant = spool_material == metadata_material
-
-		if compliant:
-			msg = f"Material Check PASSED: Spool {spool_id} ({filament_name}) material '{spool_material}' matches"
-			await self._log_to_console(msg, "info")
-			return True
-		else:
-			msg = (f"Material Check FAILED: Spool {spool_id} ({filament_name}) "
-						f"has material '{spool_material}' but gcode expects '{metadata_material}'")
-			await self._log_to_console(msg, self.material_mismatch_severity)
-			return self.material_mismatch_severity != "error"
-
 	async def check_filament_name_compliance(self, filename: str) -> bool:
 		"""
 		Check if active spool filament name matches metadata filament name
@@ -322,50 +276,49 @@ class AdditionalPrePrintChecks:
 			return self.filament_name_mismatch_severity != "error"
 
 	async def run_checks(self) -> None:
-			"""
-			Run all enabled pre-print checks on the current print file.
-			Pauses print if any check fails with error severity.
-			Called automatically from Klipper macro without parameters.
-			"""
-			logging.info("Starting Additional Pre-Print Checks...")
-			if not self.spoolman:
-				logging.warning("Spoolman component not available, skipping checks")
-				await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
-				return
+		"""
+		Run all enabled pre-print checks on the current print file.
+		Pauses print if any check fails with error severity.
+		Called automatically from Klipper macro without parameters.
+		"""
+		logging.info("Starting Additional Pre-Print Checks...")
+		if not self.spoolman:
+			logging.warning("Spoolman component not available, skipping checks")
+			await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
+			return
 
-			# Get current filename from Klipper
-			filename = await self._get_current_filename()
-			if not filename:
-				logging.warning("No current filename available, skipping checks")
-				await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
-				return
+		# Get current filename from Klipper
+		filename = await self._get_current_filename()
+		if not filename:
+			logging.warning("No current filename available, skipping checks")
+			await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
+			return
 
-			logging.info(f"Running pre-print checks for file: {filename}")
-			await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
+		logging.info(f"Running pre-print checks for file: {filename}")
+		await self._log_to_console(f"Running pre-print checks for: {filename}", "info")
 
-			# Clear cache at start of check session
+		# Clear cache at start of check session
+		self._clear_spool_cache()
+
+		try:
+			# Run all checks
+			weight_ok = await self.check_print_weight(filename)
+			filament_name_ok = await self.check_filament_name_compliance(filename)
+
+			all_ok = weight_ok and filament_name_ok
+
+			if all_ok:
+				await self._log_to_console("✓ All pre-print checks PASSED", "info")
+			else:
+				await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
+				# Pause the print
+				try:
+					await self.klippy_apis.pause_print()
+				except Exception as e:
+					logging.error(f"Failed to pause print: {e}")
+		finally:
+			# Clear cache after checks complete
 			self._clear_spool_cache()
-
-			try:
-				# Run all checks
-				weight_ok = await self.check_print_weight(filename)
-				material_ok = await self.check_material_compliance(filename)
-				filament_name_ok = await self.check_filament_name_compliance(filename)
-
-				all_ok = weight_ok and material_ok and filament_name_ok
-
-				if all_ok:
-					await self._log_to_console("✓ All pre-print checks PASSED", "info")
-				else:
-					await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
-					# Pause the print
-					try:
-						await self.klippy_apis.pause_print()
-					except Exception as e:
-						logging.error(f"Failed to pause print: {e}")
-			finally:
-				# Clear cache after checks complete
-				self._clear_spool_cache()
 
 
 def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
