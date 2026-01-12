@@ -38,31 +38,31 @@ class AdditionalPrePrintChecks:
 
 		# Configuration
 		self.weight_margin = self.config.getfloat("weight_margin_grams", 5.0)
-	self.enable_weight_check = self.config.getboolean("enable_weight_check", True)
-	self.enable_material_check = self.config.getboolean("enable_material_check", True)
-	self.enable_filament_name_check = self.config.getboolean("enable_filament_name_check", False)
+		self.enable_weight_check = self.config.getboolean("enable_weight_check", True)
+		self.enable_material_check = self.config.getboolean("enable_material_check", True)
+		self.enable_filament_name_check = self.config.getboolean("enable_filament_name_check", False)
 
-	# Mismatch severity levels: 'error', 'warning', 'info', 'ignore'
-	self.material_mismatch_severity = self.config.get("material_mismatch_severity", "warning")
-	self.filament_name_mismatch_severity = self.config.get("filament_name_mismatch_severity", "info")
+		# Mismatch severity levels: 'error', 'warning', 'info', 'ignore'
+		self.material_mismatch_severity = self.config.get("material_mismatch_severity", "warning")
+		self.filament_name_mismatch_severity = self.config.get("filament_name_mismatch_severity", "info")
 
-	# Cache for spool data during check
-	self.cached_spool_info: Optional[Dict[str, Any]] = None
-	self.cached_spool_id: Optional[int] = None
+		# Cache for spool data during check
+		self.cached_spool_info: Optional[Dict[str, Any]] = None
+		self.cached_spool_id: Optional[int] = None
 
-	# Register remote methods
-	if self.spoolman:
-		self.server.register_remote_method(
-				"pre_print_check_weight",
-				self.check_print_weight
-		)
-		self.server.register_remote_method(
-				"pre_print_check_all",
-				self.check_all
-		)
-		logging.info("Additional Pre-Print Checks: Enabled")
-	else:
-		logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
+		# Register remote methods
+		if self.spoolman:
+			self.server.register_remote_method(
+					"pre_print_check_weight",
+					self.check_print_weight
+			)
+			self.server.register_remote_method(
+					"pre_print_check_all",
+					self.check_all
+			)
+			logging.info("Additional Pre-Print Checks: Enabled")
+		else:
+			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
 
 	async def component_init(self) -> None:
 		"""Initialize component"""
