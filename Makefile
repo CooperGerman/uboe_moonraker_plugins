@@ -28,12 +28,12 @@ setup: symlinks
 
 symlinks:
 	$(info Setting up environment)
-	mkdir -p $(MOONRAKER_DIR)/extras
-	@echo "Linking .py files from $(CURDIR) to $(MOONRAKER_DIR)/extras"
+	mkdir -p $(MOONRAKER_DIR)/components
+	@echo "Linking .py files from $(CURDIR) to $(MOONRAKER_DIR)/components"
 	@for f in $(CURDIR)/*.py ; do \
 		base=$$(basename $$f) ; \
-		rm -f $(MOONRAKER_DIR)/extras/$$base ; \
-		ln -sf $(CURDIR)/$$base $(MOONRAKER_DIR)/extras/$$base ; \
+		rm -f $(MOONRAKER_DIR)/components/$$base ; \
+		ln -sf $(CURDIR)/$$base $(MOONRAKER_DIR)/components/$$base ; \
 	done
 
 
