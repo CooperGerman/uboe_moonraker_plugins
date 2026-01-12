@@ -233,6 +233,65 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(msg, "error")
 			return False
 
+	async def check_filament_name_compliance(self, filename: str) -> bool:
+		"""
+		Check if active spool filament name matches metadata filament name
+
+		Args:
+			filename: Path to gcode file
+
+		Returns:
+			True if compliant or check not applicable, False if error severity and mismatch
+		"""
+		if not self.spoolman or not self.enable_filament_name_check or self.filament_name_mismatch_severity == "ignore":
+			return True
+
+		# Get active spool and initialize data
+		spool_id = await self._init_spool()
+		if spool_id is None:
+			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
+			return True
+
+		# Get file metadata
+		metadata = self.metadata_storage.get(filename)
+		if metadata is None:
+			logging.error(f"Metadata not available for {filename}")
+			await self._log_to_console(f"No metadata available for {filename}", "error")
+			return True
+
+		# Extract filament name from metadata (first name in list)
+		metadata_filament_names = metadata.get('filament_name')
+		if not metadata_filament_names:
+			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
+			return True
+
+		# if return value is a list and has at least one entry
+		if isinstance(metadata_filament_names, list):
+			metadata_filament_name = metadata_filament_names[0].strip()
+		else:
+			metadata_filament_name = metadata_filament_names.strip()
+
+		# Get spool filament name
+		filament = self.cached_spool_info.get('filament', {})
+		spool_filament_name = filament.get('name', '').strip()
+
+		if not spool_filament_name:
+			await self._log_to_console("Spool has no filament name data, skipping check", "info")
+			return True
+
+		# Check compliance (case-insensitive)
+		compliant = spool_filament_name.lower() == metadata_filament_name.lower()
+
+		if compliant:
+			msg = f"Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches"
+			logging.info(msg)
+			return True
+		else:
+			msg = (f"Filament Name Check FAILED: Spool {spool_id} "
+						f"has name '{spool_filament_name}' but gcode expects '{metadata_filament_name}'")
+			await self._log_to_console(msg, self.filament_name_mismatch_severity)
+			return self.filament_name_mismatch_severity != "error"
+
 	async def check_mmu_tools(self, filename: str) -> bool:
 		"""
 		Check all tools used in MMU print against their assigned spools
@@ -360,65 +419,6 @@ class AdditionalPrePrintChecks:
 			if not (weight_ok and material_ok and filament_name_ok):
 				all_ok = False
 		return all_ok
-
-	async def check_filament_name_compliance(self, filename: str) -> bool:
-		"""
-		Check if active spool filament name matches metadata filament name
-
-		Args:
-			filename: Path to gcode file
-
-		Returns:
-			True if compliant or check not applicable, False if error severity and mismatch
-		"""
-		if not self.spoolman or not self.enable_filament_name_check or self.filament_name_mismatch_severity == "ignore":
-			return True
-
-		# Get active spool and initialize data
-		spool_id = await self._init_spool()
-		if spool_id is None:
-			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
-			return True
-
-		# Get file metadata
-		metadata = self.metadata_storage.get(filename)
-		if metadata is None:
-			logging.error(f"Metadata not available for {filename}")
-			await self._log_to_console(f"No metadata available for {filename}", "error")
-			return True
-
-		# Extract filament name from metadata (first name in list)
-		metadata_filament_names = metadata.get('filament_name')
-		if not metadata_filament_names:
-			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
-			return True
-
-		# if return value is a list and has at least one entry
-		if isinstance(metadata_filament_names, list):
-			metadata_filament_name = metadata_filament_names[0].strip()
-		else:
-			metadata_filament_name = metadata_filament_names.strip()
-
-		# Get spool filament name
-		filament = self.cached_spool_info.get('filament', {})
-		spool_filament_name = filament.get('name', '').strip()
-
-		if not spool_filament_name:
-			await self._log_to_console("Spool has no filament name data, skipping check", "info")
-			return True
-
-		# Check compliance (case-insensitive)
-		compliant = spool_filament_name.lower() == metadata_filament_name.lower()
-
-		if compliant:
-			msg = f"Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches"
-			logging.info(msg)
-			return True
-		else:
-			msg = (f"Filament Name Check FAILED: Spool {spool_id} "
-						f"has name '{spool_filament_name}' but gcode expects '{metadata_filament_name}'")
-			await self._log_to_console(msg, self.filament_name_mismatch_severity)
-			return self.filament_name_mismatch_severity != "error"
 
 	async def run_checks(self) -> None:
 		"""
