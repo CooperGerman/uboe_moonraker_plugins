@@ -327,9 +327,11 @@ class AdditionalPrePrintChecks:
 		# tool (index 0) mapped to gate 2, tool (index 1) mapped to gate 1, etc.
 		ttg_map = self.mmu_server.mmu_backend_config.get('mmu', {}).get('ttg_map', False)
 		gate_spool_id = self.mmu_server.mmu_backend_config.get('mmu', {}).get('gate_spool_id', False)
+		endless_spool_groups = self.mmu_server.mmu_backend_config.get('mmu', {}).get('endless_spool_groups', False)
 
 		logging.info(f"Tool to Gate Map: {ttg_map}")
 		logging.info(f"Gate to Spool Map: {gate_spool_id}")
+		logging.info(f"Endless Spool Groups: {endless_spool_groups}")
 
 		all_ok = True
 		# go through each filament used in the print and check the assigned gate and thus
@@ -340,6 +342,8 @@ class AdditionalPrePrintChecks:
 				logging.error(f"Tool index {tool_index} out of range in tool-to-gate map")
 				continue
 			gate_number = ttg_map[tool_index]
+			# check if any other gate belongs to the current gate's group
+			group = [g for g, sg in enumerate(endless_spool_groups) if sg == endless_spool_groups[gate_number]]
 
 			# Get assigned spool for gate
 			spool_id = gate_spool_id[gate_number] if gate_number < len(gate_spool_id) else None
@@ -358,31 +362,63 @@ class AdditionalPrePrintChecks:
 			required_weight = filament_weights[tool_index]
 			weight_ok = True
 			if self.enable_weight_check and required_weight is not None:
-				remaining_weight = self.cached_spool_info.get('remaining_weight')
-				if remaining_weight is not None:
-					required_with_margin = required_weight + self.weight_margin
-					weight_ok = remaining_weight >= required_with_margin
+				# if more than current spool in group, sum up their weights
+				if len(group) > 1:
+					remaining_weight = 0.0
+					for g in group:
+						spool_id_g = gate_spool_id[g] if g < len(gate_spool_id) else None
+						if spool_id_g is None:
+							continue
+						spool_info = await self._fetch_spool_info(spool_id_g)
+						if spool_info is None:
+							continue
+						rw = spool_info.get('remaining_weight')
+						if rw is not None:
+							remaining_weight += rw
+					self.cached_spool_info['remaining_weight'] = remaining_weight
+				else:
+					remaining_weight = self.cached_spool_info.get('remaining_weight')
 
-					filament = self.cached_spool_info.get('filament', {})
-					filament_name = filament.get('name', 'Unknown')
+				required_with_margin = required_weight + self.weight_margin
+				weight_ok = remaining_weight >= required_with_margin
 
-					if weight_ok:
-						msg = (f"Tool {tool_index} Weight Check PASSED: Spool {spool_id} ({filament_name}) "
-									f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
-									f"(+{self.weight_margin:.1f}g margin)")
-						logging.info(msg)
-					else:
-						deficit = required_with_margin - remaining_weight
-						msg = (f"Tool {tool_index} Weight Check FAILED: Spool {spool_id} ({filament_name}) "
-									f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
-									f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
-						await self._log_to_console(msg, "error")
-						weight_ok = False
+				filament = self.cached_spool_info.get('filament', {})
+				filament_name = filament.get('name', 'Unknown')
+
+				if weight_ok:
+					msg = (f"Tool {tool_index} Weight Check PASSED: Spool {spool_id} ({filament_name}) "
+								f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
+								f"(+{self.weight_margin:.1f}g margin)")
+					logging.info(msg)
+				else:
+					deficit = required_with_margin - remaining_weight
+					msg = (f"Tool {tool_index} Weight Check FAILED: Spool {spool_id} ({filament_name}) "
+								f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
+								f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
+					await self._log_to_console(msg, "error")
+					weight_ok = False
 			# Check material
 			material_ok = True
 			if self.enable_material_check and tool_index < len(filament_types):
 				metadata_material = filament_types[tool_index].strip()
-				spool_material = self.cached_spool_info.get('filament', {}).get('material', '').strip()
+				if len(group) > 1:
+					spool_materials = set()
+					for g in group:
+						spool_id_g = gate_spool_id[g] if g < len(gate_spool_id) else None
+						if spool_id_g is None:
+							continue
+						spool_info = await self._fetch_spool_info(spool_id_g)
+						if spool_info is None:
+							continue
+						sm = spool_info.get('filament', {}).get('material', '').strip()
+						if sm:
+							spool_materials.add(sm.lower())
+					if len(spool_materials) == 1:
+						spool_material = spool_materials.pop()
+					else:
+						spool_material = None  # Ambiguous materials in group
+				else:
+					spool_material = self.cached_spool_info.get('filament', {}).get('material', '').strip()
 
 				if not spool_material:
 					await self._log_to_console(f"Tool {tool_index} Spool {spool_id} has no material data, skipping material check", "info")
