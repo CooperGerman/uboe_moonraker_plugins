@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 DB_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spoolman.spool_id"
 
-
 class AdditionalPrePrintChecks:
 	def __init__(self, config: ConfigHelper):
 		self.config = config
@@ -488,6 +487,16 @@ class AdditionalPrePrintChecks:
 		try:
 			if is_mmu:
 				# MMU mode: check all referenced tools
+				# first wait for mmu_start_check_run to be true (can only be set when print has been started).
+				# loop only a few times with a delay to prevent infinite waiting
+				max_wait_cycles = 10
+				wait_cycles = 0
+				result = await self.klippy_apis.query_objects({'gcode_macro _MMU_RUN_MARKERS': None})
+				mmu_start_check_run = result.get('gcode_macro _MMU_RUN_MARKERS', {}).get('mmu_start_check_run')
+				while not mmu_start_check_run and wait_cycles < max_wait_cycles:
+					await asyncio.sleep(0.5)
+					wait_cycles += 1
+
 				all_ok = await self.check_mmu_tools(filename)
 			else:
 				# Single-spool mode: check active spool
