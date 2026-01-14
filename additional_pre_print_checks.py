@@ -7,7 +7,7 @@
 from __future__ import annotations
 import logging
 import asyncio
-from logging import config
+from logging import config, error
 from typing import TYPE_CHECKING, Dict, Any, Optional, List
 
 if TYPE_CHECKING:
@@ -168,8 +168,13 @@ class AdditionalPrePrintChecks:
 			logging.info(msg)
 
 		try:
-			msg = msg.replace("\n", "\\n")
-			await self.klippy_apis.run_gcode(f"M118 {msg}")
+			if self._is_mmu_enabled():
+				error_flag = "ERROR=1" if severity == "error" else ""
+				msg = msg.replace("\n", "\\n") # Get through klipper filtering
+				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
+			else:
+				msg = msg.replace("\n", "\\n")
+				await self.klippy_apis.run_gcode(f"M118 {msg}")
 		except Exception as e:
 			logging.error(f"Failed to send message to console: {e}")
 
@@ -487,25 +492,35 @@ class AdditionalPrePrintChecks:
 		try:
 			if is_mmu:
 				# MMU mode: check all referenced tools
-				# first wait for mmu_start_check_run to be true (can only be set when print has been started).
+				# first wait for mmu_start_setup_run to be true (can only be set when print has been started).
 				# loop only a few times with a delay to prevent infinite waiting
 				max_wait_cycles = 10
 				wait_cycles = 0
 				result = await self.klippy_apis.query_objects({'gcode_macro _MMU_RUN_MARKERS': None})
-				mmu_start_check_run = result.get('gcode_macro _MMU_RUN_MARKERS', {}).get('mmu_start_check_run')
-				while not mmu_start_check_run and wait_cycles < max_wait_cycles:
+				mmu_start_setup_run = result.get('gcode_macro _MMU_RUN_MARKERS', {}).get('mmu_start_setup_run')
+				logging.info(f"MMU start check run status: {mmu_start_setup_run}")
+				while not mmu_start_setup_run and wait_cycles < max_wait_cycles:
 					await asyncio.sleep(0.5)
 					wait_cycles += 1
-
+				if not mmu_start_setup_run:
+					await self._log_to_console("Pre-print checks skipped: Timed out waiting for MMU setup to complete (5s).", "warning")
+					return
 				all_ok = await self.check_mmu_tools(filename)
 			else:
 				# Single-spool mode: check active spool
 				weight_ok = await self.check_print_weight(filename)
+				# material_ok = await self.check_material_compliance(filename)
 				filament_name_ok = await self.check_filament_name_compliance(filename)
 				all_ok = weight_ok and filament_name_ok
 
 			if all_ok:
 				await self._log_to_console("✓ All pre-print checks PASSED", "info")
+				if self.enable_weight_check:
+					await self._log_to_console("   ✓ sufficient filament available", "info")
+				if self.enable_material_check:
+					await self._log_to_console("   ✓ material compliance check passed", "info")
+				if self.enable_filament_name_check:
+					await self._log_to_console("   ✓ filament name compliance check passed", "info")
 			else:
 				await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
 				# Pause the print
