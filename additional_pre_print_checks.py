@@ -296,170 +296,6 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console(msg, self.filament_name_mismatch_severity)
 			return self.filament_name_mismatch_severity != "error"
 
-	async def check_mmu_tools(self, filename: str) -> bool:
-		"""
-		Check all tools used in MMU print against their assigned spools
-
-		Args:
-			filename: Path to gcode file
-
-		Returns:
-			True if all checks passed, False if any critical check failed
-		"""
-		if not self.spoolman or not self.mmu_server:
-			return True
-
-		# Get file metadata
-		metadata = self.metadata_storage.get(filename)
-		if metadata is None:
-			logging.error(f"Metadata not available for {filename}")
-			await self._log_to_console(f"No metadata available for {filename}", "error")
-			return True
-
-		# Extract per-tool arrays from metadata
-		filament_weights = metadata.get('filament_weights', [])
-		filament_types = metadata.get('filament_type', [])
-		filament_types = [filament_types] if isinstance(filament_types, str) else filament_types
-		filament_names = metadata.get('filament_name', [])
-		filament_names = [filament_names] if isinstance(filament_names, str) else filament_names
-		logging.info(f"MMU Print Metadata - Weights: {filament_weights}, Types: {filament_types}, Names: {filament_names}")
-
-		# Refresh mmu_server cache to get current gate map
-		await self.mmu_server.refresh_cache(silent=True)
-
-		# get tool to gate map from mmu backend config (example result : [2, 1, 2, 3, 4, 5, 6, 7, 8])
-		# tool (index 0) mapped to gate 2, tool (index 1) mapped to gate 1, etc.
-		ttg_map = self.mmu_server.mmu_backend_config.get('mmu', {}).get('ttg_map', False)
-		gate_spool_id = self.mmu_server.mmu_backend_config.get('mmu', {}).get('gate_spool_id', False)
-		endless_spool_groups = self.mmu_server.mmu_backend_config.get('mmu', {}).get('endless_spool_groups', False)
-
-		logging.info(f"Tool to Gate Map: {ttg_map}")
-		logging.info(f"Gate to Spool Map: {gate_spool_id}")
-		logging.info(f"Endless Spool Groups: {endless_spool_groups}")
-
-		all_ok = True
-		# go through each filament used in the print and check the assigned gate and thus
-		# the spool on which to check the name and weight
-		for tool_index in range(len(filament_weights)):
-			# Get assigned gate for tool
-			if tool_index >= len(ttg_map):
-				logging.error(f"Tool index {tool_index} out of range in tool-to-gate map")
-				continue
-			gate_number = ttg_map[tool_index]
-			# check if any other gate belongs to the current gate's group
-			group = [g for g, sg in enumerate(endless_spool_groups) if sg == endless_spool_groups[gate_number]]
-
-			# Get assigned spool for gate
-			spool_id = gate_spool_id[gate_number] if gate_number < len(gate_spool_id) else None
-			if spool_id is None:
-				await self._log_to_console(f"No spool assigned to gate {gate_number} for tool {tool_index}, skipping checks", "warning")
-				continue
-
-			# Fetch and cache spool info
-			self.cached_spool_info = await self._fetch_spool_info(spool_id)
-			if self.cached_spool_info is None:
-				await self._log_to_console(f"Cannot fetch spool {spool_id} info for tool {tool_index}, skipping checks", "error")
-				all_ok = False
-				continue
-
-			# Check weight
-			required_weight = filament_weights[tool_index]
-			weight_ok = True
-			if self.enable_weight_check and required_weight is not None:
-				# if more than current spool in group, sum up their weights
-				if len(group) > 1:
-					remaining_weight = 0.0
-					for g in group:
-						spool_id_g = gate_spool_id[g] if g < len(gate_spool_id) else None
-						if spool_id_g is None:
-							continue
-						spool_info = await self._fetch_spool_info(spool_id_g)
-						if spool_info is None:
-							continue
-						rw = spool_info.get('remaining_weight')
-						if rw is not None:
-							remaining_weight += rw
-					self.cached_spool_info['remaining_weight'] = remaining_weight
-				else:
-					remaining_weight = self.cached_spool_info.get('remaining_weight')
-
-				required_with_margin = required_weight + self.weight_margin
-				weight_ok = remaining_weight >= required_with_margin
-
-				filament = self.cached_spool_info.get('filament', {})
-				filament_name = filament.get('name', 'Unknown')
-
-				if weight_ok:
-					msg = (f"Tool {tool_index} Weight Check PASSED: Spool {spool_id} ({filament_name}) "
-								f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
-								f"(+{self.weight_margin:.1f}g margin)")
-					logging.info(msg)
-				else:
-					deficit = required_with_margin - remaining_weight
-					msg = (f"Tool {tool_index} Weight Check FAILED: Spool {spool_id} ({filament_name}) "
-								f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
-								f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
-					await self._log_to_console(msg, "error")
-					weight_ok = False
-			# Check material
-			material_ok = True
-			if self.enable_material_check and tool_index < len(filament_types):
-				metadata_material = filament_types[tool_index].strip()
-				if len(group) > 1:
-					spool_materials = set()
-					for g in group:
-						spool_id_g = gate_spool_id[g] if g < len(gate_spool_id) else None
-						if spool_id_g is None:
-							continue
-						spool_info = await self._fetch_spool_info(spool_id_g)
-						if spool_info is None:
-							continue
-						sm = spool_info.get('filament', {}).get('material', '').strip()
-						if sm:
-							spool_materials.add(sm.lower())
-					if len(spool_materials) == 1:
-						spool_material = spool_materials.pop()
-					else:
-						spool_material = None  # Ambiguous materials in group
-				else:
-					spool_material = self.cached_spool_info.get('filament', {}).get('material', '').strip()
-
-				if not spool_material:
-					await self._log_to_console(f"Tool {tool_index} Spool {spool_id} has no material data, skipping material check", "info")
-				else:
-					material_ok = spool_material.lower() == metadata_material.lower()
-					if material_ok:
-						msg = (f"Tool {tool_index} Material Check PASSED: Spool {spool_id} material '{spool_material}' matches")
-						logging.info(msg)
-					else:
-						msg = (f"Tool {tool_index} Material Check FAILED: Spool {spool_id} "
-									f"has material '{spool_material}' but gcode expects '{metadata_material}'")
-						await self._log_to_console(msg, self.material_mismatch_severity)
-						if self.material_mismatch_severity == "error":
-							material_ok = False
-			# Check filament name
-			filament_name_ok = True
-			if self.enable_filament_name_check and tool_index < len(filament_names):
-				metadata_filament_name = filament_names[tool_index].strip()
-				spool_filament_name = self.cached_spool_info.get('filament', {}).get('name', '').strip()
-
-				if not spool_filament_name:
-					await self._log_to_console(f"Tool {tool_index} Spool {spool_id} has no filament name data, skipping name check", "info")
-				else:
-					filament_name_ok = spool_filament_name.lower() == metadata_filament_name.lower()
-					if filament_name_ok:
-						msg = (f"Tool {tool_index} Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches")
-						logging.info(msg)
-					else:
-						msg = (f"Tool {tool_index} Filament Name Check FAILED: Spool {spool_id} "
-									f"has name '{spool_filament_name}' but gcode expects '{metadata_filament_name}'")
-						await self._log_to_console(msg, self.filament_name_mismatch_severity)
-						if self.filament_name_mismatch_severity == "error":
-							filament_name_ok = False
-			if not (weight_ok and material_ok and filament_name_ok):
-				all_ok = False
-		return all_ok
-
 	async def run_checks(self) -> None:
 		"""
 		Run all enabled pre-print checks on the current print file.
@@ -489,29 +325,15 @@ class AdditionalPrePrintChecks:
 		# Clear cache at start of check session
 		self._clear_spool_cache()
 
+		if is_mmu:
+			await self._log_to_console("Pre-print checks skipped: Redundant with HH consistency checks", "warning")
+			return
 		try:
-			if is_mmu:
-				# MMU mode: check all referenced tools
-				# first wait for mmu_start_setup_run to be true (can only be set when print has been started).
-				# loop only a few times with a delay to prevent infinite waiting
-				max_wait_cycles = 10
-				wait_cycles = 0
-				result = await self.klippy_apis.query_objects({'gcode_macro _MMU_RUN_MARKERS': None})
-				mmu_start_setup_run = result.get('gcode_macro _MMU_RUN_MARKERS', {}).get('mmu_start_setup_run')
-				logging.info(f"MMU start check run status: {mmu_start_setup_run}")
-				while not mmu_start_setup_run and wait_cycles < max_wait_cycles:
-					await asyncio.sleep(0.5)
-					wait_cycles += 1
-				if not mmu_start_setup_run:
-					await self._log_to_console("Pre-print checks skipped: Timed out waiting for MMU setup to complete (5s).", "warning")
-					return
-				all_ok = await self.check_mmu_tools(filename)
-			else:
-				# Single-spool mode: check active spool
-				weight_ok = await self.check_print_weight(filename)
-				# material_ok = await self.check_material_compliance(filename)
-				filament_name_ok = await self.check_filament_name_compliance(filename)
-				all_ok = weight_ok and filament_name_ok
+			# Single-spool mode: check active spool
+			weight_ok = await self.check_print_weight(filename)
+			# material_ok = await self.check_material_compliance(filename)
+			filament_name_ok = await self.check_filament_name_compliance(filename)
+			all_ok = weight_ok and filament_name_ok
 
 			if all_ok:
 				await self._log_to_console("✓ All pre-print checks PASSED", "info")
