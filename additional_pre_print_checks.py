@@ -72,11 +72,14 @@ class AdditionalPrePrintChecks:
 			await self._init_spool()
 			logging.info("Additional Pre-Print Checks component initialized")
 
-	def _is_mmu_enabled(self) -> bool:
+	async def _is_mmu_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
 			return False
-		return self.mmu_server._init_mmu_backend()
+		await self._init_mmu_backend()
+		if self._mmu_backend_enabled():
+			return True
+		return False
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
@@ -168,7 +171,7 @@ class AdditionalPrePrintChecks:
 			logging.info(msg)
 
 		try:
-			if self._is_mmu_enabled():
+			if await self._is_mmu_enabled():
 				error_flag = "ERROR=1" if severity == "error" else ""
 				msg = msg.replace("\n", "\\n") # Get through klipper filtering
 				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
@@ -317,7 +320,7 @@ class AdditionalPrePrintChecks:
 			return
 
 		# Check if MMU mode
-		is_mmu = self._is_mmu_enabled()
+		is_mmu = await self._is_mmu_enabled()
 		mode = "MMU multi-tool" if is_mmu else "Single-spool"
 		logging.info(f"Running {mode} pre-print checks for file: {filename}")
 		await self._log_to_console(f"Running {mode} checks for: {filename}", "info")
