@@ -28,6 +28,7 @@ class AdditionalPrePrintChecks:
 		self.server = config.get_server()
 		self.spoolman: Optional[SpoolManager] = None
 		self.mmu_server: Optional[MmuServer] = None
+		self.error_body = []
 
 		# Load components
 		if config.has_section("spoolman"):
@@ -153,7 +154,7 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Failed to get current filename: {e}")
 			return None
 
-	async def _log_to_console(self, msg: str, severity: str = "info") -> None:
+	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Check Failed") -> None:
 		"""
 		Send message to Klipper console with appropriate severity
 
@@ -176,8 +177,7 @@ class AdditionalPrePrintChecks:
 			else:
 				msg = msg.replace("\n", "\\n")
 				if severity == "error":
-					await self.klippy_apis.run_gcode('_UBOE_ERROR_DIALOG MSG="%s" REASON="%s"' % (msg, "Pre-Print Check Failed"))
-					await self.klippy_apis.run_gcode(f"PAUSE")
+					await self.klippy_apis.run_gcode('_UBOE_ERROR_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
 				else :
 					await self.klippy_apis.run_gcode(f"M118 {msg}")
 		except Exception as e:
@@ -205,8 +205,7 @@ class AdditionalPrePrintChecks:
 		# Get file metadata
 		metadata = self.metadata_storage.get(filename)
 		if metadata is None:
-			logging.error(f"Metadata not available for {filename}")
-			await self._log_to_console(f"No metadata available for {filename}", "error")
+			self.error_body.append(f"Metadata not available for {filename}")
 			return True
 
 		# Extract required weight from metadata
@@ -239,7 +238,7 @@ class AdditionalPrePrintChecks:
 			msg = (f"Weight Check FAILED: Spool {spool_id} ({filament_name}) "
 						f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
 						f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
-			await self._log_to_console(msg, "error")
+			self.error_body.append(msg)
 			return False
 
 	async def check_filament_name_compliance(self, filename: str) -> bool:
@@ -264,8 +263,7 @@ class AdditionalPrePrintChecks:
 		# Get file metadata
 		metadata = self.metadata_storage.get(filename)
 		if metadata is None:
-			logging.error(f"Metadata not available for {filename}")
-			await self._log_to_console(f"No metadata available for {filename}", "error")
+			self.error_body.append(f"Metadata not available for {filename}")
 			return True
 
 		# Extract filament name from metadata (first name in list)
@@ -297,8 +295,11 @@ class AdditionalPrePrintChecks:
 			return True
 		else:
 			msg = (f"Filament Name Check FAILED: Spool {spool_id} "
-						f"has name '{spool_filament_name}' but gcode expects '{metadata_filament_name}'")
-			await self._log_to_console(msg, self.filament_name_mismatch_severity)
+						f"has name `{spool_filament_name}` but gcode expects `{metadata_filament_name}`")
+			if self.filament_name_mismatch_severity != 'error':
+				await self._log_to_console(msg, self.filament_name_mismatch_severity)
+			else :
+				self.error_body.append(msg)
 			return self.filament_name_mismatch_severity != "error"
 
 	async def run_checks(self) -> None:
@@ -349,16 +350,16 @@ class AdditionalPrePrintChecks:
 				if self.enable_filament_name_check:
 					await self._log_to_console("   ✓ filament name compliance check passed", "info")
 			else:
-				await self._log_to_console("✗ Pre-print checks FAILED - Print paused", "error")
 				# Pause the print
 				try:
 					await self.klippy_apis.pause_print()
 				except Exception as e:
 					logging.error(f"Failed to pause print: {e}")
+				await self._log_to_console(msg=(". ".join(self.error_body)), reason="Pre-Print Check Failed", severity="error")
 		finally:
 			# Clear cache after checks complete
 			self._clear_spool_cache()
-
+			self.error_body = []
 
 def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
 	return AdditionalPrePrintChecks(config)
