@@ -76,10 +76,8 @@ class AdditionalPrePrintChecks:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
 			return False
-		await self._init_mmu_backend()
-		if self._mmu_backend_enabled():
-			return True
-		return False
+		await self.mmu_server._init_mmu_backend()
+		return self.mmu_server._mmu_backend_enabled()
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
@@ -177,7 +175,11 @@ class AdditionalPrePrintChecks:
 				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
 			else:
 				msg = msg.replace("\n", "\\n")
-				await self.klippy_apis.run_gcode(f"M118 {msg}")
+				if severity == "error":
+					await self.klippy_apis.run_gcode('_UBOE_ERROR_DIALOG MSG="%s" REASON="%s"' % (msg, "Pre-Print Check Failed"))
+					await self.klippy_apis.run_gcode(f"PAUSE")
+				else :
+					await self.klippy_apis.run_gcode(f"M118 {msg}")
 		except Exception as e:
 			logging.error(f"Failed to send message to console: {e}")
 
