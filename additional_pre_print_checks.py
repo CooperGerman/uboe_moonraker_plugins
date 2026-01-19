@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from logging import config, error
+import os
 from typing import TYPE_CHECKING, Dict, Any, Optional, List
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 	from ..components.mmu_server import MmuServer
 	from ..confighelper import ConfigHelper
 	from ..components.klippy_apis import KlippyAPI as APIComp
+	from ..components.klippy_connection import KlippyConnection
 	from ..components.file_manager.file_manager import FileManager
 	from ..components.file_manager.metadata import MetadataStorage
 	from ..components.database import MoonrakerDatabase
@@ -45,6 +47,8 @@ class AdditionalPrePrintChecks:
 		self.enable_material_check = self.config.getboolean("enable_material_check", True)
 		self.enable_filament_name_check = self.config.getboolean("enable_filament_name_check", False)
 
+		self.multi_tool_mapping =  False
+
 		# Mismatch severity levels: 'error', 'warning', 'info', 'ignore'
 		self.material_mismatch_severity = self.config.get("material_mismatch_severity", "warning")
 		self.filament_name_mismatch_severity = self.config.get("filament_name_mismatch_severity", "info")
@@ -54,6 +58,7 @@ class AdditionalPrePrintChecks:
 		self.cached_spool_id: Optional[int] = None
 
 		# Init mmu_server component
+		self.is_hh = False
 		if config.has_section("mmu_server"):
 			self.mmu_server = self.server.load_component(config, "mmu_server", None)
 
@@ -67,18 +72,43 @@ class AdditionalPrePrintChecks:
 		else:
 			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
 
+
+
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		if self.spoolman:
 			await self._init_spool()
 			logging.info("Additional Pre-Print Checks component initialized")
 
-	async def _is_mmu_enabled(self) -> bool:
+		# Create a background task to wait for connection and finish init
+		asyncio.create_task(self._finish_init(retry=3))
+
+	async def _finish_init(self, retry: int = 3) -> None:
+		"""Wait for Klippy connection then finish initialization"""
+		for _ in range(retry):
+			connected =await self.server.klippy_connection.wait_connected()
+			if not connected:
+				logging.warning("Additional Pre-Print Checks: Klippy not connected, retrying...")
+				await asyncio.sleep(2)
+			else:
+				logging.info("Additional Pre-Print Checks: Klippy connected, finishing init")
+				break
+
+		await self._is_hh_enabled()
+		self._init_metadata_script()
+
+	def _init_metadata_script(self) -> None:
+		from .file_manager import file_manager
+		current_dir = os.path.dirname(os.path.abspath(__file__))
+		file_manager.METADATA_SCRIPT = current_dir + "/super_metadata.py"
+		logging.info("Additional Pre-Print Checks: Set new metadata script for enhanced parsing")
+
+	async def _is_hh_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
 			return False
 		await self.mmu_server._init_mmu_backend()
-		return self.mmu_server._mmu_backend_enabled()
+		self.is_hh = self.mmu_server._mmu_backend_enabled()
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
@@ -170,7 +200,7 @@ class AdditionalPrePrintChecks:
 			logging.info(msg)
 
 		try:
-			if await self._is_mmu_enabled():
+			if self.is_hh:
 				error_flag = "ERROR=1" if severity == "error" else ""
 				msg = msg.replace("\n", "\\n") # Get through klipper filtering
 				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
@@ -210,6 +240,8 @@ class AdditionalPrePrintChecks:
 
 		# Extract required weight from metadata
 		required_weight = metadata.get('filament_weight_total')
+		await self._log_to_console(f"Required weight from metadata: {required_weight}g", "info")
+
 		if required_weight is None:
 			await self._log_to_console("No weight data in file metadata, skipping check", "warning")
 			return True
@@ -302,13 +334,19 @@ class AdditionalPrePrintChecks:
 				self.error_body.append(msg)
 			return self.filament_name_mismatch_severity != "error"
 
-	async def run_checks(self) -> None:
+	async def run_checks(self, tool_gate_map=None) -> None:
 		"""
 		Run all enabled pre-print checks on the current print file.
 		Auto-detects MMU mode and runs appropriate checks.
 		Pauses print if any check fails with error severity.
 		Called automatically from Klipper macro without parameters.
+		params:
+			tools: List of tool indices to check default checks only T0
+			gate_ids: List of gate IDs. This is mandatory if tools arg is used.
 		"""
+		if tool_gate_map is not None:
+			self.multi_tool_mapping = tool_gate_map
+
 		logging.info("Starting Additional Pre-Print Checks...")
 		if not self.spoolman:
 			logging.warning("Spoolman component not available, skipping checks")
@@ -323,15 +361,15 @@ class AdditionalPrePrintChecks:
 			return
 
 		# Check if MMU mode
-		is_mmu = await self._is_mmu_enabled()
-		mode = "MMU multi-tool" if is_mmu else "Single-spool"
+		await self._is_hh_enabled() # only check once here and cache
+		mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
 		logging.info(f"Running {mode} pre-print checks for file: {filename}")
 		await self._log_to_console(f"Running {mode} checks for: {filename}", "info")
 
 		# Clear cache at start of check session
 		self._clear_spool_cache()
 
-		if is_mmu:
+		if self.is_hh:
 			await self._log_to_console("Pre-print checks skipped: Redundant with HH consistency checks", "warning")
 			return
 		try:
