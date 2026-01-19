@@ -72,8 +72,6 @@ class AdditionalPrePrintChecks:
 		else:
 			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
 
-
-
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		if self.spoolman:
@@ -239,39 +237,51 @@ class AdditionalPrePrintChecks:
 			return False
 
 		# Extract required weight from metadata
-		required_weight = metadata.get('filament_weight_total')
+		required_weight = metadata.get('filament_weights')
 		await self._log_to_console(f"Required weight from metadata: {required_weight}g", "info")
 
 		if required_weight is None:
 			await self._log_to_console("No weight data in file metadata, skipping check", "warning")
 			return True
 
-		# Get remaining weight from cached spool info
-		remaining_weight = self.cached_spool_info.get('remaining_weight')
-		if remaining_weight is None:
-			await self._log_to_console("Spool has no remaining weight data, skipping check", "warning")
-			return True
-
-		# Perform check
-		required_with_margin = required_weight + self.weight_margin
-		sufficient = remaining_weight >= required_with_margin
-
-		filament = self.cached_spool_info.get('filament', {})
-		filament_name = filament.get('name', 'Unknown')
-
-		if sufficient:
-			msg = (f"Weight Check PASSED: Spool {spool_id} ({filament_name}) "
-						f"has {remaining_weight:.1f}g, need {required_weight:.1f}g "
-						f"(+{self.weight_margin:.1f}g margin)")
-			logging.info(msg)
-			return True
+		if self.multi_tool_mapping:
+			if len(self.multi_tool_mapping) != len(required_weight):
+				self.error_body.append(f"Mismatch between slicer referenced tools ({len(required_weight)}) and provided tool to gate map ({len(self.multi_tool_mapping)})")
+				return False
+			tool_range = range(len(self.multi_tool_mapping))
 		else:
-			deficit = required_with_margin - remaining_weight
-			msg = (f"Weight Check FAILED: Spool {spool_id} ({filament_name}) "
-						f"has only {remaining_weight:.1f}g, need {required_weight:.1f}g "
-						f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
-			self.error_body.append(msg)
-			return False
+			tool_range = range(1)  # Single tool T0
+		for tool_index in tool_range:
+			if self.multi_tool_mapping:
+				self.cached_spool_info = await self._fetch_spool_info(self.multi_tool_mapping[tool_index])
+				if self.cached_spool_info is None:
+					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {self.multi_tool_mapping[tool_index]})")
+					return False
+
+			# Get remaining weight from cached spool info
+			remaining_weight = self.cached_spool_info.get('remaining_weight')
+			if remaining_weight is None:
+				await self._log_to_console("Spool has no remaining weight data, skipping check", "warning")
+				return True
+
+			# Perform check
+			required_with_margin = required_weight[tool_index] + self.weight_margin
+			sufficient = remaining_weight >= required_with_margin
+
+			filament = self.cached_spool_info.get('filament', {})
+			filament_name = filament.get('name', 'Unknown')
+
+			if sufficient:
+				msg = (f"Weight Check PASSED: Spool {spool_id} ({filament_name}) "
+							f"has {remaining_weight:.1f}g, need {required_weight[tool_index]:.1f}g "
+							f"(+{self.weight_margin:.1f}g margin)")
+				logging.info(msg)
+			else:
+				deficit = required_with_margin - remaining_weight
+				msg = (f"Weight Check FAILED: Spool {spool_id} ({filament_name}) "
+							f"has only {remaining_weight:.1f}g, need {required_weight[tool_index]:.1f}g "
+							f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
+				self.error_body.append(msg)
 
 	async def check_filament_name_compliance(self, filename: str) -> bool:
 		"""
