@@ -5,6 +5,7 @@
 # by comparing metadata weight requirements against Spoolman active spool data
 #
 from __future__ import annotations
+import json
 import logging
 import asyncio
 from logging import config, error
@@ -238,11 +239,14 @@ class AdditionalPrePrintChecks:
 
 		# Extract required weight from metadata
 		required_weight = metadata.get('filament_weights')
-		await self._log_to_console(f"Required weight from metadata: {required_weight}g", "info")
 
 		if required_weight is None:
-			await self._log_to_console("No weight data in file metadata, skipping check", "warning")
-			return True
+			self.error_body.append("No filament weight data in file metadata")
+			return False
+
+		# if it is not a list, make it a list
+		if not isinstance(required_weight, list):
+			required_weight = [required_weight]
 
 		if self.multi_tool_mapping:
 			if len(self.multi_tool_mapping) != len(required_weight):
@@ -251,6 +255,9 @@ class AdditionalPrePrintChecks:
 			tool_range = range(len(self.multi_tool_mapping))
 		else:
 			tool_range = range(1)  # Single tool T0
+
+		# Check each tool/spool
+		weight_ok = True
 		for tool_index in tool_range:
 			if self.multi_tool_mapping:
 				self.cached_spool_info = await self._fetch_spool_info(self.multi_tool_mapping[tool_index])
@@ -261,8 +268,8 @@ class AdditionalPrePrintChecks:
 			# Get remaining weight from cached spool info
 			remaining_weight = self.cached_spool_info.get('remaining_weight')
 			if remaining_weight is None:
-				await self._log_to_console("Spool has no remaining weight data, skipping check", "warning")
-				return True
+				self.error_body.append("Spool has no remaining weight data, skipping check", "warning")
+				return False
 
 			# Perform check
 			required_with_margin = required_weight[tool_index] + self.weight_margin
@@ -282,6 +289,8 @@ class AdditionalPrePrintChecks:
 							f"has only {remaining_weight:.1f}g, need {required_weight[tool_index]:.1f}g "
 							f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
 				self.error_body.append(msg)
+				weight_ok = False
+		return weight_ok
 
 	async def check_filament_name_compliance(self, filename: str) -> bool:
 		"""
@@ -298,7 +307,7 @@ class AdditionalPrePrintChecks:
 
 		# Get active spool and initialize data
 		spool_id = await self._init_spool()
-		if spool_id is None:
+		if spool_id is None and not self.multi_tool_mapping:
 			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
 			return True
 
@@ -306,43 +315,68 @@ class AdditionalPrePrintChecks:
 		metadata = self.metadata_storage.get(filename)
 		if metadata is None:
 			self.error_body.append(f"Metadata not available for {filename}")
-			return True
+			return False
 
 		# Extract filament name from metadata (first name in list)
 		metadata_filament_names = metadata.get('filament_name')
 		if not metadata_filament_names:
 			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
 			return True
+		# if it is not a list, make it a list
+		metadata_filament_names = json.loads(metadata_filament_names)
+		if not isinstance(metadata_filament_names, list):
+			metadata_filament_names = [metadata_filament_names]
 
-		# if return value is a list and has at least one entry
-		if isinstance(metadata_filament_names, list):
-			metadata_filament_name = metadata_filament_names[0].strip()
+		if self.multi_tool_mapping:
+			if len(self.multi_tool_mapping) != len(metadata_filament_names):
+				self.error_body.append(f"Mismatch between slicer referenced tools ({len(metadata_filament_names)}) and provided tool to gate map ({len(self.multi_tool_mapping)})")
+				return False
+			tool_range = range(len(self.multi_tool_mapping))
 		else:
-			metadata_filament_name = metadata_filament_names.strip()
+			tool_range = range(1)  # Single tool T0
 
-		# Get spool filament name
-		filament = self.cached_spool_info.get('filament', {})
-		spool_filament_name = filament.get('name', '').strip()
+		check_passed = True
 
-		if not spool_filament_name:
-			await self._log_to_console("Spool has no filament name data, skipping check", "info")
-			return True
+		for tool_index in tool_range:
+			if self.multi_tool_mapping:
+				current_spool_id = self.multi_tool_mapping[tool_index]
+				self.cached_spool_info = await self._fetch_spool_info(current_spool_id)
+				if self.cached_spool_info is None:
+					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {current_spool_id})")
+					return False
+			else:
+				current_spool_id = spool_id
 
-		# Check compliance (case-insensitive)
-		compliant = spool_filament_name.lower() == metadata_filament_name.lower()
+			# Get spool filament name
+			filament = self.cached_spool_info.get('filament', {})
+			spool_filament_name = filament.get('name', '').strip()
 
-		if compliant:
-			msg = f"Filament Name Check PASSED: Spool {spool_id} name '{spool_filament_name}' matches"
-			logging.info(msg)
-			return True
-		else:
-			msg = (f"Filament Name Check FAILED: Spool {spool_id} "
-						f"has name `{spool_filament_name}` but gcode expects `{metadata_filament_name}`")
-			if self.filament_name_mismatch_severity != 'error':
-				await self._log_to_console(msg, self.filament_name_mismatch_severity)
-			else :
-				self.error_body.append(msg)
-			return self.filament_name_mismatch_severity != "error"
+			if not spool_filament_name:
+				await self._log_to_console(f"Spool {current_spool_id} has no filament name data, skipping check", "info")
+				continue
+
+			# Check compliance (case-insensitive)
+			if tool_index >= len(metadata_filament_names):
+				# Should not happen if lengths checked, but for safety:
+				target_name = metadata_filament_names[0]
+			else:
+				target_name = metadata_filament_names[tool_index]
+
+			compliant = spool_filament_name.lower() == target_name.lower()
+
+			if compliant:
+				msg = f"Filament Name Check PASSED: Spool {current_spool_id} name '{spool_filament_name}' matches"
+				logging.info(msg)
+			else:
+				msg = (f"Filament Name Check FAILED: Spool {current_spool_id} "
+							f"has name `{spool_filament_name}` but gcode expects `{target_name}`")
+				if self.filament_name_mismatch_severity != 'error':
+					await self._log_to_console(msg, self.filament_name_mismatch_severity)
+				else :
+					self.error_body.append(msg)
+					check_passed = False
+
+		return check_passed
 
 	async def run_checks(self, tool_gate_map=None) -> None:
 		"""
