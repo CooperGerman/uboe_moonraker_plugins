@@ -199,25 +199,25 @@ class AdditionalPrePrintChecks:
 		# Get active spool and initialize data
 		spool_id = await self._init_spool()
 		if spool_id is None:
-			await self._log_to_console("No active spool set or cannot fetch spool info, skipping weight check", "info")
-			return True
+			self.error_body.append("No active spool set or cannot fetch spool info")
+			return False
 
 		# Get file metadata
 		metadata = self.metadata_storage.get(filename)
 		if metadata is None:
 			self.error_body.append(f"Metadata not available for {filename}")
-			return True
+			return False
 
 		# Extract required weight from metadata
 		required_weight = metadata.get('filament_weight_total')
 		if required_weight is None:
-			await self._log_to_console("No weight data in file metadata, skipping check", "info")
+			await self._log_to_console("No weight data in file metadata, skipping check", "warning")
 			return True
 
 		# Get remaining weight from cached spool info
 		remaining_weight = self.cached_spool_info.get('remaining_weight')
 		if remaining_weight is None:
-			await self._log_to_console("Spool has no remaining weight data, skipping check", "info")
+			await self._log_to_console("Spool has no remaining weight data, skipping check", "warning")
 			return True
 
 		# Perform check
