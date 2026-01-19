@@ -94,7 +94,6 @@ for slicer in metadata.SUPPORTED_SLICERS:
 
 metadata.SUPPORTED_SLICERS = new_supported_slicers
 metadata.SUPPORTED_DATA.append("filament_weights")
-metadata.SUPPORTED_DATA.append("filament_names")
 
 if __name__ == "__main__":
     # Configure logging
