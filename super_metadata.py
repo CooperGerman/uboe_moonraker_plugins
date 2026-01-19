@@ -13,20 +13,14 @@ import metadata
 
 # Define our custom class inheriting from PrusaSlicer
 class SuperPrusaSlicer(metadata.PrusaSlicer):
-    def parse_filament_weight_total(self) -> metadata.Optional[float]:
-        # Try the original regex first (for "total filament used [g] = ...")
-        total_weight = metadata.regex_find_float(
-            r"total\sfilament\sused\s\[g\]\s=\s(%F)",
+    def parse_filament_weights(self) -> metadata.Optional[float]:
+        usages = metadata.regex_find_floats(
+            r"filament\sused\s\[g\]\s=\s(%F)",
             self.footer_data
         )
-        if total_weight is not None:
-            return total_weight
-
-        else :
-            return metadata.regex_find_floats(
-                r"filament\sused\s\[g\]\s=\s(%F)",
-                self.footer_data
-            )
+        if usages is not None:
+            metadata.logger.info(f"SuperPrusaSlicer: parse_filament_weight_total found usages={usages}")
+        return usages
 
 # Monkey-patch the SUPPORTED_SLICERS list in the metadata module
 # We replace the original PrusaSlicer with our SuperPrusaSlicer
@@ -39,6 +33,7 @@ for slicer in metadata.SUPPORTED_SLICERS:
         new_supported_slicers.append(slicer)
 
 metadata.SUPPORTED_SLICERS = new_supported_slicers
+metadata.SUPPORTED_DATA.append("filament_weights")
 
 if __name__ == "__main__":
     # Configure logging
