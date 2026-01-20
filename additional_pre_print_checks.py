@@ -106,7 +106,6 @@ class AdditionalPrePrintChecks:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
 			return False
-		await self.mmu_server._init_mmu_backend()
 		self.is_hh = self.mmu_server._mmu_backend_enabled()
 
 	async def _init_spool(self) -> Optional[int]:
@@ -323,6 +322,7 @@ class AdditionalPrePrintChecks:
 			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
 			return True
 		# if it is not a list, make it a list
+		logging.info(f"Raw metadata filament names: {metadata_filament_names}")
 		metadata_filament_names = json.loads(metadata_filament_names)
 		if not isinstance(metadata_filament_names, list):
 			metadata_filament_names = [metadata_filament_names]
@@ -388,10 +388,12 @@ class AdditionalPrePrintChecks:
 			tools: List of tool indices to check default checks only T0
 			gate_ids: List of gate IDs. This is mandatory if tools arg is used.
 		"""
+		logging.info("Starting Additional Pre-Print Checks...")
+
+		logging.info(f"tool_gate_map: {tool_gate_map}")
 		if tool_gate_map is not None:
 			self.multi_tool_mapping = tool_gate_map
 
-		logging.info("Starting Additional Pre-Print Checks...")
 		if not self.spoolman:
 			logging.warning("Spoolman component not available, skipping checks")
 			await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
