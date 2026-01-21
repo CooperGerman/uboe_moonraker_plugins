@@ -41,7 +41,7 @@ class AdditionalPrePrintChecks:
 		self.file_manager: FileManager = self.server.lookup_component("file_manager")
 		self.metadata_storage: MetadataStorage = self.file_manager.get_metadata_storage()
 		self.database: MoonrakerDatabase = self.server.lookup_component("database")
-
+		self.klippy_connection: KlippyConnection = self.server.lookup_component("klippy_connection")
 		# Configuration
 		self.weight_margin = self.config.getfloat("weight_margin_grams", 5.0)
 		self.enable_weight_check = self.config.getboolean("enable_weight_check", True)
@@ -60,8 +60,6 @@ class AdditionalPrePrintChecks:
 
 		# Init mmu_server component
 		self.is_hh = False
-		if config.has_section("mmu_server"):
-			self.mmu_server = self.server.load_component(config, "mmu_server", None)
 
 		# Register remote methods
 		if self.spoolman:
@@ -80,21 +78,31 @@ class AdditionalPrePrintChecks:
 			logging.info("Additional Pre-Print Checks component initialized")
 
 		# Create a background task to wait for connection and finish init
-		asyncio.create_task(self._finish_init(retry=3))
+		# We use a task because blocking component_init on wait_connected would cause a deadlock
+		asyncio.create_task(self._finish_init(3))
 
-	async def _finish_init(self, retry: int = 3) -> None:
+	async def _finish_init(self, retry=3) -> None:
 		"""Wait for Klippy connection then finish initialization"""
-		for _ in range(retry):
-			connected =await self.server.klippy_connection.wait_connected()
-			if not connected:
-				logging.warning("Additional Pre-Print Checks: Klippy not connected, retrying...")
-				await asyncio.sleep(2)
-			else:
-				logging.info("Additional Pre-Print Checks: Klippy connected, finishing init")
-				break
+		# Wait for Klippy to be connected
+		for __ in range(retry):
+			connected = await self.klippy_connection.wait_connected()
+			logging.info("Additional Pre-Print Checks: Klippy connected, finishing init")
 
-		await self._is_hh_enabled()
-		self._init_metadata_script()
+			if connected:
+				break
+			await asyncio.sleep(2)
+		# Look up MMU server now that we are connected
+		if self.config.has_section("mmu_server"):
+				self.mmu_server = self.server.lookup_component("mmu_server", None)
+
+		logging.info(f"Additional Pre-Print Checks: MMU Server = {self.mmu_server is not None}")
+
+		if self.mmu_server:
+			await self.mmu_server._initialize_mmu()
+		# Initialize metadata script override
+		self._is_hh_enabled()
+		if not self.is_hh:
+			self._init_metadata_script()
 
 	def _init_metadata_script(self) -> None:
 		from .file_manager import file_manager
@@ -102,11 +110,13 @@ class AdditionalPrePrintChecks:
 		file_manager.METADATA_SCRIPT = current_dir + "/super_metadata.py"
 		logging.info("Additional Pre-Print Checks: Set new metadata script for enhanced parsing")
 
-	async def _is_hh_enabled(self) -> bool:
+	def _is_hh_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
+			self.is_hh = False
 			return False
 		self.is_hh = self.mmu_server._mmu_backend_enabled()
+		return self.is_hh
 
 	async def _init_spool(self) -> Optional[int]:
 		"""
