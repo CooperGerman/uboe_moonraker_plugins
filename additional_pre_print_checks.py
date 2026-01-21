@@ -248,9 +248,6 @@ class AdditionalPrePrintChecks:
 			required_weight = [required_weight]
 
 		if self.multi_tool_mapping:
-			if len(self.multi_tool_mapping) != len(required_weight):
-				self.error_body.append(f"Mismatch between slicer referenced tools ({len(required_weight)}) and provided tool to gate map ({len(self.multi_tool_mapping)})")
-				return False
 			tool_range = range(len(self.multi_tool_mapping))
 		else:
 			tool_range = range(1)  # Single tool T0
@@ -331,9 +328,6 @@ class AdditionalPrePrintChecks:
 			metadata_filament_names = [metadata_filament_names]
 
 		if self.multi_tool_mapping:
-			if len(self.multi_tool_mapping) != len(metadata_filament_names):
-				self.error_body.append(f"Mismatch between slicer referenced tools ({len(metadata_filament_names)}) and provided tool to gate map ({len(self.multi_tool_mapping)})")
-				return False
 			tool_range = range(len(self.multi_tool_mapping))
 		else:
 			tool_range = range(1)  # Single tool T0
