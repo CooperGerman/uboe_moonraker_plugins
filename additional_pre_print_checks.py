@@ -259,10 +259,13 @@ class AdditionalPrePrintChecks:
 		weight_ok = True
 		for tool_index in tool_range:
 			if self.multi_tool_mapping:
-				self.cached_spool_info = await self._fetch_spool_info(self.multi_tool_mapping[tool_index])
+				current_spool_id =  self.multi_tool_mapping[tool_index]
+				self.cached_spool_info = await self._fetch_spool_info(current_spool_id)
 				if self.cached_spool_info is None:
-					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {self.multi_tool_mapping[tool_index]})")
+					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {current_spool_id})")
 					return False
+			else:
+				current_spool_id = spool_id
 
 			# Get remaining weight from cached spool info
 			remaining_weight = self.cached_spool_info.get('remaining_weight')
@@ -278,13 +281,13 @@ class AdditionalPrePrintChecks:
 			filament_name = filament.get('name', 'Unknown')
 
 			if sufficient:
-				msg = (f"Weight Check PASSED: Spool {spool_id} ({filament_name}) "
+				msg = (f"Weight Check PASSED: Spool {current_spool_id} ({filament_name}) "
 							f"has {remaining_weight:.1f}g, need {required_weight[tool_index]:.1f}g "
 							f"(+{self.weight_margin:.1f}g margin)")
 				logging.info(msg)
 			else:
 				deficit = required_with_margin - remaining_weight
-				msg = (f"Weight Check FAILED: Spool {spool_id} ({filament_name}) "
+				msg = (f"Weight Check FAILED: Spool {current_spool_id} ({filament_name}) "
 							f"has only {remaining_weight:.1f}g, need {required_weight[tool_index]:.1f}g "
 							f"(+{self.weight_margin:.1f}g margin). SHORT BY {deficit:.1f}g!")
 				self.error_body.append(msg)
