@@ -100,14 +100,17 @@ if __name__ == "__main__":
     logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
     parser = argparse.ArgumentParser(
-        description="Supercharged GCode Metadata Extraction Utility")
+        description="GCode Metadata Extraction Utility")
     parser.add_argument(
-        "-f", "--filename", metavar='<filename>',
+        "-c", "--config", metavar='<config_file>', default=None,
+        help="Optional json configuration file for metadata.py"
+    )
+    parser.add_argument(
+        "-f", "--filename", metavar='<filename>', default=None,
         help="name gcode file to parse")
     parser.add_argument(
-        "-p", "--path", default=os.path.abspath(os.path.dirname(__file__)),
-        metavar='<path>',
-        help="optional absolute path for file"
+        "-p", "--path", metavar='<path>', default=None,
+        help="optional path to folder containing the file"
     )
     parser.add_argument(
         "-u", "--ufp", metavar="<ufp file>", default=None,
@@ -115,9 +118,33 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-o", "--check-objects", dest='check_objects', action='store_true',
-        help="process gcode file for exclude opbject functionality")
-
+        help="process gcode file for exclude object functionality")
     args = parser.parse_args()
+    config: Dict[str, Any] = {}
+    if args.config is None:
+        if args.filename is None:
+            metadata.logger.info(
+                "The '--filename' (-f) option must be specified when "
+                " --config is not set"
+            )
+            sys.exit(-1)
+        config["filename"] = args.filename
+        config["gcode_dir"] = args.path
+        config["ufp_path"] = args.ufp
+        config["check_objects"] = args.check_objects
+    else:
+        # Config file takes priority over command line options
+        try:
+            with open(args.config, "r") as f:
+                config = (json.load(f))
+        except Exception:
+            metadata.logger.info(traceback.format_exc())
+            sys.exit(-1)
+        if config.get("filename") is None:
+            metadata.logger.info("The 'filename' field must be present in the configuration")
+            sys.exit(-1)
+    if config.get("gcode_dir") is None:
+        config["gcode_dir"] = os.path.abspath(os.path.dirname(__file__))
 
     # Call the original main function with our patched environment
-    metadata.main(args.path, args.filename, args.ufp, args.check_objects)
+    metadata.main(config)
