@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+from asyncio.log import logger
+from asyncio.log import logger
 import json
 import argparse
 import re
@@ -120,31 +122,41 @@ if __name__ == "__main__":
         "-o", "--check-objects", dest='check_objects', action='store_true',
         help="process gcode file for exclude object functionality")
     args = parser.parse_args()
-    config: Dict[str, Any] = {}
-    if args.config is None:
-        if args.filename is None:
-            metadata.logger.info(
-                "The '--filename' (-f) option must be specified when "
-                " --config is not set"
-            )
-            sys.exit(-1)
-        config["filename"] = args.filename
-        config["gcode_dir"] = args.path
-        config["ufp_path"] = args.ufp
-        config["check_objects"] = args.check_objects
-    else:
-        # Config file takes priority over command line options
-        try:
-            with open(args.config, "r") as f:
-                config = (json.load(f))
-        except Exception:
-            metadata.logger.info(traceback.format_exc())
-            sys.exit(-1)
-        if config.get("filename") is None:
-            metadata.logger.info("The 'filename' field must be present in the configuration")
-            sys.exit(-1)
-    if config.get("gcode_dir") is None:
-        config["gcode_dir"] = os.path.abspath(os.path.dirname(__file__))
+    # if the main function requires def (path: str,filename: str,ufp: Optional[str],check_objects: bool) call it like this
+    # lookup how many args are needed
+    import inspect
+    sig = inspect.signature(metadata.main)
+    if len(sig.parameters) == 4:
+        check_objects = args.check_objects
+        enabled_msg = "enabled" if check_objects else "disabled"
+        logger.info(f"Object Processing is {enabled_msg}")
+        metadata.main(args.path, args.filename, args.ufp, check_objects)
+    else :
+        config: Dict[str, Any] = {}
+        if args.config is None:
+            if args.filename is None:
+                metadata.logger.info(
+                    "The '--filename' (-f) option must be specified when "
+                    " --config is not set"
+                )
+                sys.exit(-1)
+            config["filename"] = args.filename
+            config["gcode_dir"] = args.path
+            config["ufp_path"] = args.ufp
+            config["check_objects"] = args.check_objects
+        else:
+            # Config file takes priority over command line options
+            try:
+                with open(args.config, "r") as f:
+                    config = (json.load(f))
+            except Exception:
+                metadata.logger.info(traceback.format_exc())
+                sys.exit(-1)
+            if config.get("filename") is None:
+                metadata.logger.info("The 'filename' field must be present in the configuration")
+                sys.exit(-1)
+        if config.get("gcode_dir") is None:
+            config["gcode_dir"] = os.path.abspath(os.path.dirname(__file__))
 
-    # Call the original main function with our patched environment
-    metadata.main(config)
+        # Call the original main function with our patched environment
+        metadata.main(config)
