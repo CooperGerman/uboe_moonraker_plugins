@@ -414,7 +414,7 @@ class AdditionalPrePrintChecks:
 			return
 
 		# Check if MMU mode
-		await self._is_hh_enabled() # only check once here and cache
+		self._is_hh_enabled()
 		mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
 		logging.info(f"Running {mode} pre-print checks for file: {filename}")
 		await self._log_to_console(f"Running {mode} checks for: {filename}", "info")
