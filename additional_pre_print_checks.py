@@ -101,8 +101,13 @@ class AdditionalPrePrintChecks:
 			await self.mmu_server._initialize_mmu()
 		# Initialize metadata script override
 		self._is_hh_enabled()
-		if not self.is_hh and self.server.get_app_args()["software_version"] <= "0.10.0":
-			self._init_metadata_script()
+		if not self.is_hh:
+			if not self.server.get_app_args()["software_version"] <= "0.10.0":
+				self._init_metadata_script()
+			else :
+				logging.warning("Additional Pre-Print Checks: will not override metadata script as newer versions of Moonraker have built-in support for filament weights.")
+		else :
+			logging.info("Additional Pre-Print Checks: Detected HH mode, skipping metadata script override")
 
 	def _init_metadata_script(self) -> None:
 		from .file_manager import file_manager
