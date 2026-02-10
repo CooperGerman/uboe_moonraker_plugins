@@ -101,7 +101,7 @@ class AdditionalPrePrintChecks:
 			await self.mmu_server._initialize_mmu()
 		# Initialize metadata script override
 		self._is_hh_enabled()
-		if not self.is_hh:
+		if not self.is_hh and self.server.get_app_args()["software_version"] <= "0.10.0":
 			self._init_metadata_script()
 
 	def _init_metadata_script(self) -> None:
@@ -327,15 +327,16 @@ class AdditionalPrePrintChecks:
 			return False
 
 		# Extract filament name from metadata (first name in list)
-		metadata_filament_names = metadata.get('filament_name')
-		if not metadata_filament_names:
+		metadata_filament_names = metadata.get('filament_name', None)
+		if metadata_filament_names == None:
 			await self._log_to_console("No filament name data in file metadata, skipping check", "info")
 			return True
 		# if it is not a list, make it a list
 		logging.info(f"Raw metadata filament names: {metadata_filament_names}")
-		metadata_filament_names = json.loads(metadata_filament_names)
 		if not isinstance(metadata_filament_names, list):
 			metadata_filament_names = [metadata_filament_names]
+		if not isinstance(metadata_filament_names, list):
+			metadata_filament_names = json.loads(metadata_filament_names)
 
 		if self.multi_tool_mapping:
 			tool_range = range(len(self.multi_tool_mapping))
