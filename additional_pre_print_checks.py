@@ -102,7 +102,7 @@ class AdditionalPrePrintChecks:
 		# Initialize metadata script override
 		self._is_hh_enabled()
 		if not self.is_hh:
-			if not self.server.get_app_args()["software_version"] <= "0.10.0":
+			if self.server.get_app_args()["software_version"] <= "0.10.0":
 				self._init_metadata_script()
 			else :
 				logging.warning("Additional Pre-Print Checks: will not override metadata script as newer versions of Moonraker have built-in support for filament weights.")
