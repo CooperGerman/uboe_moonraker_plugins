@@ -2,16 +2,42 @@
 This repo contains useful plugins used by uboe. Some of them are comfort plugins, some of them are useful for debugging and some of them are used to extend the functionality of Moonraker.
 
 # Installation
-1. Clone the repo preferably in your home directory:
+
+## Option 1: Automatic Updates via Moonraker (Recommended)
+If you have Moonraker update manager configured, add the following to your `moonraker.conf`:
+
+```ini
+[update_manager uboe_moonraker_plugins]
+type: git_repo
+path: ~/uboe_moonraker_plugins
+origin: https://github.com/CooperGerman/uboe_moonraker_plugins.git
+install_script: install.sh
+managed_services: moonraker
+is_system_service: False
+primary_branch: main
+```
+
+Moonraker will then automatically install and manage updates for these plugins.
+
+## Option 2: Manual Installation
+Clone the repo in your home directory and run the install script:
+
 ```bash
 cd ~
 git clone https://github.com/CooperGerman/uboe_moonraker_plugins.git
 cd uboe_moonraker_plugins
+./install.sh
+```
+
+Or use the Makefile:
+```bash
+cd ~/uboe_moonraker_plugins
 make setup
 ```
-This will create symlinks for each plugin in the moonraker/moonraker/components folder in order for moonraker to "see" the plugins.
 
-**You will need to restart the moonraker service for the changes to take effect.**
+Both methods will create symlinks for each plugin in the `moonraker/moonraker/components` folder so Moonraker can load the plugins.
+
+**After installation, you will need to restart the moonraker service for the changes to take effect.**
 
 # Plugins
 
