@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 from asyncio.log import logger
-from asyncio.log import logger
 import json
 import argparse
 import re
