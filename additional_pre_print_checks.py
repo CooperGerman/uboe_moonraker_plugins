@@ -11,6 +11,7 @@ import asyncio
 from logging import config, error
 import os
 from typing import TYPE_CHECKING, Dict, Any, Optional, List
+from packaging.version import Version
 
 if TYPE_CHECKING:
 	from ..components.spoolman import SpoolManager
@@ -102,7 +103,8 @@ class AdditionalPrePrintChecks:
 		# Initialize metadata script override
 		self._is_hh_enabled()
 		if not self.is_hh:
-			if self.server.get_app_args()["software_version"] <= "0.10.0":
+			# compare moonraker version (ex: v0.9.3-0-g71f9e67) to 0.10.0
+			if self.server.get_app_args()["software_version"] and Version(self.server.get_app_args()["software_version"].lstrip("v").split("-")[0]) <= Version("0.10.0"):
 				self._init_metadata_script("super_metadata.py")
 			else :
 				self._init_metadata_script("file_manager/metadata.py")
@@ -114,7 +116,7 @@ class AdditionalPrePrintChecks:
 		from .file_manager import file_manager
 		current_dir = os.path.dirname(os.path.abspath(__file__))
 		file_manager.METADATA_SCRIPT = current_dir + f"/{script_name}"
-		logging.info("Additional Pre-Print Checks: Set new metadata script for enhanced parsing")
+		logging.info(f"Additional Pre-Print Checks: Set new metadata script ({script_name}) for enhanced parsing")
 
 	def _is_hh_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
@@ -254,7 +256,6 @@ class AdditionalPrePrintChecks:
 
 		# Extract required weight from metadata
 		required_weight = metadata.get('filament_weights')
-
 		if required_weight is None:
 			self.error_body.append("No filament weight data in file metadata")
 			return False
@@ -339,6 +340,10 @@ class AdditionalPrePrintChecks:
 			return True
 		# if it is not a list, make it a list
 		logging.info(f"Raw metadata filament names: {metadata_filament_names}")
+		try:
+			metadata_filament_names = eval(metadata_filament_names) # convert if it is a stringified list
+		except:
+			pass
 		if not isinstance(metadata_filament_names, list):
 			metadata_filament_names = [metadata_filament_names]
 		if not isinstance(metadata_filament_names, list):
