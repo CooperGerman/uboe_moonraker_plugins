@@ -37,4 +37,9 @@ for f in "${SCRIPT_DIR}"/*.py ; do
 	fi
 done
 
+# activate moonraker venv and install requirements.txt
+if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
+    "${HOME}/moonraker-env/bin/pip" install -r "${SCRIPT_DIR}/requirements.txt"
+fi
+
 echo "Installation complete!"
