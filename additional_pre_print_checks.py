@@ -104,7 +104,9 @@ class AdditionalPrePrintChecks:
 		self._is_hh_enabled()
 		if not self.is_hh:
 			# compare moonraker version (ex: v0.9.3-0-g71f9e67) to 0.10.0
-			if self.server.get_app_args()["software_version"] and Version(self.server.get_app_args()["software_version"].lstrip("v").split("-")[0]) <= Version("0.10.0"):
+			moonraker_version = self.server.get_app_args()["software_version"].lstrip("v").split("-")[0]
+			if self.server.get_app_args()["software_version"] and Version(moonraker_version) < Version("0.10.0"):
+				logging.warning(f"Additional Pre-Print Checks: Detected older Moonraker version ({moonraker_version}) without built-in filament weight support, overriding metadata script for enhanced parsing")
 				self._init_metadata_script("super_metadata.py")
 			else :
 				self._init_metadata_script("file_manager/metadata.py")
