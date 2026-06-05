@@ -448,12 +448,12 @@ class AdditionalPrePrintChecks:
 
 			if all_ok:
 				await self._log_to_console("✓ All pre-print checks PASSED", "info")
-				if self.enable_weight_check:
-					await self._log_to_console("   ✓ sufficient filament available", "info")
-				if self.enable_material_check:
-					await self._log_to_console("   ✓ material compliance check passed", "info")
 				if self.enable_filament_name_check:
 					await self._log_to_console("   ✓ filament name compliance check passed", "info")
+				if self.enable_material_check:
+					await self._log_to_console("   ✓ material compliance check passed", "info")
+				if self.enable_weight_check:
+					await self._log_to_console("   ✓ sufficient filament available", "info")
 			else:
 				# Pause the print
 				try:
