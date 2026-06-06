@@ -35,7 +35,7 @@ for f in "${SCRIPT_DIR}"/*.py ; do
 		ln -sf "${SCRIPT_DIR}/${base}" "${MOONRAKER_DIR}/components/${base}"
 		echo "Linked: ${base}"
 		# Add the symlinked file to git's local exclude list to avoid it showing as untracked
-		exclude_entry="${MOONRAKER_DIR}/components/${base}"
+		exclude_entry="moonraker/components/${base}"
 		if ! grep -qF "${exclude_entry}" "${HOME}/moonraker/.git/info/exclude"; then
 			echo "${exclude_entry}" >> "${HOME}/moonraker/.git/info/exclude"
 			echo "Added to git exclude: ${exclude_entry}"
