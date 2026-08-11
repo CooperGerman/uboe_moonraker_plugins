@@ -46,7 +46,7 @@ class ExtractedMetadata:
 	def _parse_filament_weights(self) -> Optional[List[float]]:
 		weights = self.raw_metadata.get('filament_weights')
 		if weights is None:
-			self.error_body.append("No filament weight requirements in file metadata, skipping weight check", "warning")
+			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
 			return None
 		if not isinstance(weights, list):
 			weights = [weights]
@@ -55,7 +55,7 @@ class ExtractedMetadata:
 	def _parse_filament_names(self) -> Optional[List[str]]:
 		names = self.raw_metadata.get('filament_name')
 		if names is None:
-			self.error_body.append("No filament name data in file metadata, skipping filament name check", "warning")
+			self.error_body.append("No filament name data in file metadata, skipping filament name check")
 			return None
 		if not isinstance(names, list):
 			# if it is not a list, make it a list
@@ -73,7 +73,7 @@ class ExtractedMetadata:
 	def _parse_referenced_tools(self) -> Optional[List[int]]:
 		tools = self.raw_metadata.get('referenced_tools')
 		if tools is None:
-			self.error_body.append("No referenced tool data in file metadata, warnings and errors might be inaccurate", "error")
+			self.error_body.append("No referenced tool data in file metadata, warnings and errors might be inaccurate")
 			return None
 		if not isinstance(tools, list):
 			tools = [tools]
@@ -305,20 +305,20 @@ class AdditionalPrePrintChecks:
 			return False
 
 		if self.extracted_metadata.filament_weights is None:
-			self.error_body.append("No filament weight requirements in file metadata, skipping weight check", "warning")
+			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
 			return False
 
 		if self.multi_tool_mapping:
 			tool_range = range(len(self.multi_tool_mapping))
 		else:
 			if self.extracted_metadata.referenced_tools is None:
-				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.", "error")
+				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
 				return False
 			elif len(self.extracted_metadata.referenced_tools) == 0:
-				self.error_body.append("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Skipping weight check.", "warning")
+				self.error_body.append("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Skipping weight check.")
 				return False
 			elif len(self.extracted_metadata.referenced_tools) > 1:
-				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.", "error")
+				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
 				return False
 			tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
@@ -337,7 +337,7 @@ class AdditionalPrePrintChecks:
 			# Get remaining weight from cached spool info
 			remaining_weight = self.cached_spool_info.get('remaining_weight')
 			if remaining_weight is None:
-				self.error_body.append("Spool has no remaining weight data, skipping check", "warning")
+				self.error_body.append("Spool has no remaining weight data, skipping check")
 				return False
 
 			required_weight = self.extracted_metadata.filament_weights[tool_index]
@@ -382,7 +382,7 @@ class AdditionalPrePrintChecks:
 			return True
 
 		if self.extracted_metadata.filament_names is None:
-			self.error_body.append("No filament weight requirements in file metadata, skipping weight check", "warning")
+			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
 			return False
 
 		if self.multi_tool_mapping:
