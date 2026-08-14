@@ -130,49 +130,18 @@ class AdditionalPrePrintChecks:
 		"""Initialize component"""
 		if self.spoolman:
 			await self._init_spool()
-			logging.info("Additional Pre-Print Checks component initialized")
+		# check is metadata.py file is ours (symbolic link to the origin of current file /file_manager/metadata.py) and that the original file exists at destination as metadata_orig.py.
+		path_to_plugins = os.path.join(os.path.dirname(os.readlink(__file__)))
+		if not os.path.islink(os.path.join(os.path.dirname(__file__), "file_manager", "metadata.py")):
+			mess = "metadata.py is not a symbolic link, uboe_moonraker_plugins might not be installed correctly, please ensure it points to the original metadata.py file in the file_manager directory (rerun ./install.sh in the uboe_moonraker_plugins directory if needed)."
+			logging.error(mess)
+			await self._log_to_console(mess, "error")
+		elif os.path.join(os.path.dirname(os.readlink(__file__)), "file_manager", "metadata.py") != path_to_plugins:
+			mess = "metadata.py symbolic link does not point to the original metadata.py file in the file_manager directory, uboe_moonraker_plugins might not be installed correctly (rerun ./install.sh in the uboe_moonraker_plugins directory if needed)."
+			logging.error(mess)
+			await self._log_to_console(mess, "error")
 
-		# Create a background task to wait for connection and finish init
-		# We use a task because blocking component_init on wait_connected would cause a deadlock
-		asyncio.create_task(self._finish_init(3))
-
-	async def _finish_init(self, retry=3) -> None:
-		"""Wait for Klippy connection then finish initialization"""
-		# Wait for Klippy to be connected
-		for __ in range(retry):
-			connected = await self.klippy_connection.wait_connected()
-			logging.info("Additional Pre-Print Checks: Klippy connected, finishing init")
-
-			if connected:
-				break
-			await asyncio.sleep(2)
-		# Look up MMU server now that we are connected
-		if self.config.has_section("mmu_server"):
-				self.mmu_server = self.server.lookup_component("mmu_server", None)
-
-		logging.info(f"Additional Pre-Print Checks: MMU Server = {self.mmu_server is not None}")
-
-		if self.mmu_server:
-			await self.mmu_server._initialize_mmu()
-		# Initialize metadata script override
-		self._is_hh_enabled()
-		if not self.is_hh:
-			# compare moonraker version (ex: v0.9.3-0-g71f9e67) to 0.10.0
-			moonraker_version = self.server.get_app_args()["software_version"].lstrip("v").split("-")[0]
-			if self.server.get_app_args()["software_version"] and Version(moonraker_version) < Version("0.10.0"):
-				logging.warning(f"Additional Pre-Print Checks: Detected older Moonraker version ({moonraker_version}) without built-in filament weight support, overriding metadata script for enhanced parsing")
-				self._init_metadata_script("super_metadata.py")
-			else :
-				self._init_metadata_script("file_manager/metadata.py")
-				logging.warning("Additional Pre-Print Checks: will not override metadata script as newer versions of Moonraker have built-in support for filament weights.")
-		else :
-			logging.info("Additional Pre-Print Checks: Detected HH mode, skipping metadata script override")
-
-	def _init_metadata_script(self, script_name: str) -> None:
-		from .file_manager import file_manager
-		current_dir = os.path.dirname(os.path.abspath(__file__))
-		file_manager.METADATA_SCRIPT = current_dir + f"/{script_name}"
-		logging.info(f"Additional Pre-Print Checks: Set new metadata script ({script_name}) for enhanced parsing")
+		logging.info("Additional Pre-Print Checks component initialized")
 
 	def _is_hh_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
