@@ -22,9 +22,6 @@ set -e
 MOONRAKER_DIR="${HOME}/moonraker/moonraker"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Create the components directory if it doesn't exist
-mkdir -p "${MOONRAKER_DIR}/components"
-
 echo "Linking .py files from ${SCRIPT_DIR} to ${MOONRAKER_DIR}/components"
 
 # Find and symlink all .py files in the script directory (not subdirectories)
@@ -42,10 +39,23 @@ for f in "${SCRIPT_DIR}"/*.py ; do
 		fi
 	fi
 done
+# rename original metadata.py file in moonraker/components to metadata_orig.py
+if [ -f "${MOONRAKER_DIR}/components/file_manager/metadata.py" ]; then
+	mv "${MOONRAKER_DIR}/components/file_manager/metadata.py" "${MOONRAKER_DIR}/components/file_manager/metadata_orig.py"
+	echo "Renamed original metadata.py to metadata_orig.py"
+	rm -f "${MOONRAKER_DIR}/components/file_manager/metadata.py"
+	ln -sf "${SCRIPT_DIR}/file_manager/metadata.py" "${MOONRAKER_DIR}/components/file_manager/metadata.py"
+	exclude_entry="moonraker/components/file_manager/metadata_orig.py"
+	if ! grep -qF "${exclude_entry}" "${HOME}/moonraker/.git/info/exclude"; then
+		echo "${exclude_entry}" >> "${HOME}/moonraker/.git/info/exclude"
+		echo "Added to git exclude: ${exclude_entry}"
+	fi
+fi
 
 # activate moonraker venv and install requirements.txt
 if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
     "${HOME}/moonraker-env/bin/pip" install -r "${SCRIPT_DIR}/requirements.txt"
 fi
+
 
 echo "Installation complete!"
