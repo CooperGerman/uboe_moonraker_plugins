@@ -13,6 +13,9 @@ import zipfile
 import shutil
 import uuid
 import logging
+import urllib.request
+import urllib.error
+from packaging.version import Version
 from PIL import Image
 
 # Annotation imports
@@ -27,13 +30,13 @@ from typing import (
 )
 if TYPE_CHECKING:
     pass
-# Make it look like we are running in the file_manager directory
-directory = os.path.dirname(os.path.abspath(__file__))
-target_dir = directory + "/file_manager"
-os.chdir(target_dir)
-sys.path.insert(0, target_dir)
+# # Make it look like we are running in the file_manager directory
+# directory = os.path.dirname(os.path.abspath(__file__))
+# target_dir = directory + "/file_manager"
+# os.chdir(target_dir)
+# sys.path.insert(0, target_dir)
 
-import metadata
+import metadata_orig
 
 def regex_find_strings(pattern: str, separators: str, data: str) -> List[str]:
     pattern = pattern.replace(r"(%S)", r"(.*)")
@@ -52,20 +55,34 @@ def regex_find_strings(pattern: str, separators: str, data: str) -> List[str]:
         return parsed_matches
     return []
 
+def get_moonraker_version(port: int = 7125, timeout: float = 2.0) -> Optional[str]:
+    # Query Moonraker's own HTTP API since this script runs as a subprocess
+    # with no access to the Server object.
+    url = f"http://127.0.0.1:{port}/server/info"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        # version can be v0.10.0-31-gd5ee171-dirty for example so strip any suffixes after the first dash
+        version = data.get("version", "")
+        return version.split("-")[0] if version else None
+    except (urllib.error.URLError, KeyError, json.JSONDecodeError):
+        logger.warning("Unable to fetch Moonraker version from %s", url)
+        return None
+
 # Define our custom class inheriting from PrusaSlicer
-class SuperPrusaSlicer(metadata.PrusaSlicer):
+class SuperPrusaSlicer(metadata_orig.PrusaSlicer):
 
     def _verify_need_for_patch(self, method_name):
         # verify that the methods we are adding are actually needed (no already present)
-        metadata.logger.info(f"Verifying need for patch method: {method_name}")
-        if method_name in metadata.PrusaSlicer.__dict__:
-            metadata.logger.error(f"Method {method_name} already exists in PrusaSlicer, patch might not be needed anymore!")
+        metadata_orig.logger.info(f"Verifying need for patch method: {method_name}")
+        if method_name in metadata_orig.PrusaSlicer.__dict__:
+            metadata_orig.logger.error(f"Method {method_name} already exists in PrusaSlicer, patch might not be needed anymore!")
 
     def parse_filament_weights(self) -> Optional[List[float]]:
         self._verify_need_for_patch("parse_filament_weights")
-        line = metadata.regex_find_string(r'filament\sused\s\[g\]\s=\s(%S)\n', self.footer_data)
+        line = metadata_orig.regex_find_string(r'filament\sused\s\[g\]\s=\s(%S)\n', self.footer_data)
         if line:
-            weights = metadata.regex_find_floats(
+            weights = metadata_orig.regex_find_floats(
                 r"(%F)", line
             )
             if weights:
@@ -83,18 +100,25 @@ class SuperPrusaSlicer(metadata.PrusaSlicer):
             return result[0]
         return None
 
-# Monkey-patch the SUPPORTED_SLICERS list in the metadata module
-# We replace the original PrusaSlicer with our SuperPrusaSlicer
-new_supported_slicers = []
-for slicer in metadata.SUPPORTED_SLICERS:
-    # Check if it is exactly PrusaSlicer (not a subclass like Slic3rPE)
-    if slicer is metadata.PrusaSlicer:
-        new_supported_slicers.append(SuperPrusaSlicer)
-    else:
-        new_supported_slicers.append(slicer)
+moonraker_version = get_moonraker_version()
+if moonraker_version and moonraker_version < "0.10.0":
+    logging.warning(f"Additional Pre-Print Checks: Detected older Moonraker version ({moonraker_version}) without built-in filament weight support, overriding metadata script for enhanced parsing")
+    # Monkey-patch the SUPPORTED_SLICERS list in the metadata module
+    # We replace the original PrusaSlicer with our SuperPrusaSlicer
+    new_supported_slicers = []
+    for slicer in metadata_orig.SUPPORTED_SLICERS:
+        # Check if it is exactly PrusaSlicer (not a subclass like Slic3rPE)
+        if slicer is metadata_orig.PrusaSlicer:
+            new_supported_slicers.append(SuperPrusaSlicer)
+        else:
+            new_supported_slicers.append(slicer)
 
-metadata.SUPPORTED_SLICERS = new_supported_slicers
-metadata.SUPPORTED_DATA.append("filament_weights")
+    metadata_orig.SUPPORTED_SLICERS = new_supported_slicers
+    metadata_orig.SUPPORTED_DATA.append("filament_weights")
+
+def main(config: Dict[str, Any]) -> None:
+    # Call the original main function with our patched environment
+    metadata_orig.main(config)
 
 if __name__ == "__main__":
     # Configure logging
@@ -104,7 +128,7 @@ if __name__ == "__main__":
         description="GCode Metadata Extraction Utility")
     parser.add_argument(
         "-c", "--config", metavar='<config_file>', default=None,
-        help="Optional json configuration file for metadata.py"
+        help="Optional json configuration file for metadata_orig.py"
     )
     parser.add_argument(
         "-f", "--filename", metavar='<filename>', default=None,
@@ -124,17 +148,17 @@ if __name__ == "__main__":
     # if the main function requires def (path: str,filename: str,ufp: Optional[str],check_objects: bool) call it like this
     # lookup how many args are needed
     import inspect
-    sig = inspect.signature(metadata.main)
+    sig = inspect.signature(metadata_orig.main)
     if len(sig.parameters) == 4:
         check_objects = args.check_objects
         enabled_msg = "enabled" if check_objects else "disabled"
         logger.info(f"Object Processing is {enabled_msg}")
-        metadata.main(args.path, args.filename, args.ufp, check_objects)
+        metadata_orig.main(args.path, args.filename, args.ufp, check_objects)
     else :
         config: Dict[str, Any] = {}
         if args.config is None:
             if args.filename is None:
-                metadata.logger.info(
+                metadata_orig.logger.info(
                     "The '--filename' (-f) option must be specified when "
                     " --config is not set"
                 )
@@ -149,13 +173,13 @@ if __name__ == "__main__":
                 with open(args.config, "r") as f:
                     config = (json.load(f))
             except Exception:
-                metadata.logger.info(traceback.format_exc())
+                metadata_orig.logger.info(traceback.format_exc())
                 sys.exit(-1)
             if config.get("filename") is None:
-                metadata.logger.info("The 'filename' field must be present in the configuration")
+                metadata_orig.logger.info("The 'filename' field must be present in the configuration")
                 sys.exit(-1)
         if config.get("gcode_dir") is None:
             config["gcode_dir"] = os.path.abspath(os.path.dirname(__file__))
 
         # Call the original main function with our patched environment
-        metadata.main(config)
+        metadata_orig.main(config)
