@@ -130,16 +130,6 @@ class AdditionalPrePrintChecks:
 		"""Initialize component"""
 		if self.spoolman:
 			await self._init_spool()
-		# check is metadata.py file is ours (symbolic link to the origin of current file /file_manager/metadata.py) and that the original file exists at destination as metadata_orig.py.
-		path_to_plugins = os.path.join(os.path.dirname(os.readlink(__file__)))
-		if not os.path.islink(os.path.join(os.path.dirname(__file__), "file_manager", "metadata.py")):
-			mess = "metadata.py is not a symbolic link, uboe_moonraker_plugins might not be installed correctly, please ensure it points to the original metadata.py file in the file_manager directory (rerun ./install.sh in the uboe_moonraker_plugins directory if needed)."
-			logging.error(mess)
-			await self._log_to_console(mess, "error")
-		elif os.path.join(os.path.dirname(os.readlink(__file__)), "file_manager", "metadata.py") != path_to_plugins:
-			mess = "metadata.py symbolic link does not point to the original metadata.py file in the file_manager directory, uboe_moonraker_plugins might not be installed correctly (rerun ./install.sh in the uboe_moonraker_plugins directory if needed)."
-			logging.error(mess)
-			await self._log_to_console(mess, "error")
 
 		logging.info("Additional Pre-Print Checks component initialized")
 
