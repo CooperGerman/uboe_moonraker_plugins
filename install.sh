@@ -39,18 +39,6 @@ for f in "${SCRIPT_DIR}"/*.py ; do
 		fi
 	fi
 done
-# rename original metadata.py file in moonraker/components to metadata_orig.py
-if [ -f "${MOONRAKER_DIR}/components/file_manager/metadata.py" ]; then
-	mv "${MOONRAKER_DIR}/components/file_manager/metadata.py" "${MOONRAKER_DIR}/components/file_manager/metadata_orig.py"
-	echo "Renamed original metadata.py to metadata_orig.py"
-	rm -f "${MOONRAKER_DIR}/components/file_manager/metadata.py"
-	ln -sf "${SCRIPT_DIR}/file_manager/metadata.py" "${MOONRAKER_DIR}/components/file_manager/metadata.py"
-	exclude_entry="moonraker/components/file_manager/metadata_orig.py"
-	if ! grep -qF "${exclude_entry}" "${HOME}/moonraker/.git/info/exclude"; then
-		echo "${exclude_entry}" >> "${HOME}/moonraker/.git/info/exclude"
-		echo "Added to git exclude: ${exclude_entry}"
-	fi
-fi
 
 # activate moonraker venv and install requirements.txt
 if [ -f "${SCRIPT_DIR}/requirements.txt" ]; then
