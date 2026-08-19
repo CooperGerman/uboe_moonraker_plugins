@@ -19,7 +19,7 @@ from ..components.uboe_metadata import ExtrusionPoints
 if TYPE_CHECKING:
 	from ..components.spoolman import SpoolManager
 	from ..components.mmu_server import MmuServer
-	from ..confighelper import ConfigHelper
+	from ..confighelper import ConfigHelper, ConfigError
 	from ..components.klippy_apis import KlippyAPI as APIComp
 	from ..components.klippy_connection import KlippyConnection
 	from ..components.file_manager.file_manager import FileManager
@@ -131,7 +131,6 @@ class AdditionalPrePrintChecks:
 		self.spoolman: Optional[SpoolManager] = None
 		self.mmu_server: Optional[MmuServer] = None
 		self.error_body = []
-		self.uboe_metadata = self.server.lookup_component("uboe_metadata", None)
 
 		# Load components
 		if config.has_section("spoolman"):
@@ -181,14 +180,19 @@ class AdditionalPrePrintChecks:
 				self.run_checks
 			)
 			logging.info("Additional Pre-Print Checks: Enabled")
+			self.enabled = True
 		else:
 			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
+			self.enabled = False
 
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		if self.spoolman:
 			await self._init_spool()
-
+		try:
+			self.uboe_metadata = self.server.lookup_component("uboe_metadata")
+		except Exception as e:
+			raise self.config.error(f"[{self.config.get_name()}]: {e}")
 		logging.info("Additional Pre-Print Checks component initialized")
 
 	def _is_hh_enabled(self) -> bool:
