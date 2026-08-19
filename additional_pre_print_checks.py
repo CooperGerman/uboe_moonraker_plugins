@@ -179,7 +179,7 @@ class AdditionalPrePrintChecks:
 				self.run_checks
 			)
 			logging.info("Additional Pre-Print Checks: Enabled")
-			self.enabled = False
+			self.enabled = True
 		else:
 			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
 			self.enabled = False
