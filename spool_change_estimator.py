@@ -29,14 +29,16 @@ class SpoolChangeEstimator:
 		self.config = config
 		self.server = config.get_server()
 		self.server.register_remote_method(
-			"UBOE_SPOOL_CHANGE_ESTIMATE",
+			"uboe_spool_change_estimate",
 			self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE
 		)
 
-	def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self, extr_id, volume):
+	async def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self, extr_id, volume) -> None:
 		"""Estimate the spool change for a given extrusion ID and volume."""
 		# Placeholder for actual implementation
-		logging.info(f"Estimating spool change for extrusion ID: {extr_id}, volume: {volume}")
+		await self._log_to_console(f"Estimating spool change for extrusion ID: {extr_id}, volume: {volume}", "info", "Spool Change Estimator")
+		if not self.additional_pre_print_checks.enabled:
+			await self._log_to_console("Additional Pre-Print Checks component is not enabled. Spool Change Estimator will not function properly.", "warning", "Spool Change Estimator Initialization")
 
 	async def component_init(self) -> None:
 		"""Initialize component"""
@@ -45,9 +47,6 @@ class SpoolChangeEstimator:
 		except Exception as e:
 			raise self.config.error(f"[{self.config.get_name()}]: {e}")
 		logging.info("Spool Change Estimator component initialized")
-
-
-
 
 	async def _log_to_console(self, msg: str = "Empty message", severity: str = "info", reason: str = "Spool Change Estimate Fail") -> None:
 		await self.additional_pre_print_checks._log_to_console(msg, severity, reason)

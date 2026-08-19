@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import asyncio
-from logging import config, error
 import os
 from typing import TYPE_CHECKING, Dict, Any, Optional, List
 from packaging.version import Version
@@ -180,7 +179,7 @@ class AdditionalPrePrintChecks:
 				self.run_checks
 			)
 			logging.info("Additional Pre-Print Checks: Enabled")
-			self.enabled = True
+			self.enabled = False
 		else:
 			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
 			self.enabled = False
@@ -277,20 +276,40 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Failed to get current filename: {e}")
 			self.filename = None
 
-	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Check Failed") -> None:
+	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Check Failed", force_error_dialog=False) -> None:
 		"""
 		Send message to Klipper console with appropriate severity
-
+		(heavily inspired by ratos see console_echo in ratos.py)
 		Args:
 			msg: Message to log
 			severity: 'error', 'warning', or 'info'
 		"""
-		if severity == "error":
-			logging.error(msg)
-		elif severity == "warning":
-			logging.warning(msg)
+		color = "white"
+		opacity = 1.0
+		if severity == 'info': color = "#38bdf8"
+		if severity == 'success': color = "#a3e635"
+		if severity == 'warning': color = "#fbbf24"
+		if severity == 'alert': color = "#f87171"
+		if severity == 'error': color = "#f87171"
+		if severity == 'debug': color = "#38bdf8"
+		if severity == 'debug': opacity = 0.7
+
+		msg = msg.replace("_N_","\n")
+
+		if (severity == 'error' or severity == 'alert'):
+			logging.error(reason + ": " + msg)
+		if (severity == 'warning'):
+			logging.warning(reason + ": " + msg)
+		if (severity == 'info'):
+			logging.info(reason + ": " + msg)
+		if (severity == 'debug'):
+			logging.debug(reason + ": " + msg)
+
+		_title = '<p style="font-weight: bold; margin:0; opacity:' + str(opacity) + '; color:' + color + '">' + reason + '</p>'
+		if msg:
+			_msg = '<p style="margin:0; opacity:' + str(opacity) + '; color:' + color + '">' + msg + '</p>'
 		else:
-			logging.info(msg)
+			_msg = ''
 
 		try:
 			if self.is_hh:
@@ -299,10 +318,10 @@ class AdditionalPrePrintChecks:
 				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
 			else:
 				msg = msg.replace("\n", "\\n")
-				if severity == "error":
+				if severity == "error" or force_error_dialog:
 					await self.klippy_apis.run_gcode('_UBOE_ERROR_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
 				else :
-					await self.klippy_apis.run_gcode(f"M118 {msg}")
+					await self.klippy_apis.run_gcode(f"M118 <div>{_title}{_msg}</div>")
 		except Exception as e:
 			logging.error(f"Failed to send message to console: {e}")
 
@@ -668,15 +687,15 @@ class AdditionalPrePrintChecks:
 
 		if not self.spoolman:
 			logging.warning("Spoolman component not available, skipping checks")
-			await self._log_to_console("Pre-print checks skipped: Spoolman not available", "warning")
-			return
+			self.error_body.append("Pre-print checks skipped: Spoolman not available")
+			return False
 
 		# Get current filename from Klipper
 		await self._get_current_filename()
 		if not self.filename:
 			logging.warning("No current filename available, skipping checks")
-			await self._log_to_console("Pre-print checks skipped: No filename available", "warning")
-			return
+			self.error_body.append("Pre-print checks skipped: No filename available")
+			return False
 
 		# Check if MMU mode
 		self._is_hh_enabled()
@@ -688,7 +707,7 @@ class AdditionalPrePrintChecks:
 		self._clear_spool_cache()
 
 		self.extracted_metadata = ExtractedMetadata(self.metadata_storage, self.filename, self.error_body)
-
+		return True
 
 	async def run_checks(self, tool_gate_map=None) -> None:
 		"""
@@ -748,6 +767,7 @@ class AdditionalPrePrintChecks:
 						await self.klippy_apis.pause_print()
 					except Exception as e:
 						logging.error(f"Failed to pause print: {e}")
+					logging.error(f'Errors : {self.error_body}')
 					await self._log_to_console(msg=(".\n".join(self.error_body)), reason="Pre-Print Check Failed", severity="error")
 			finally:
 				# Clear cache after checks complete
