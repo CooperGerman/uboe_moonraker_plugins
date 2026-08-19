@@ -28,18 +28,29 @@ class SpoolChangeEstimator:
 	def __init__(self, config: ConfigHelper):
 		self.config = config
 		self.server = config.get_server()
+		self.server.register_remote_method(
+			"UBOE_SPOOL_CHANGE_ESTIMATE",
+			self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE
+		)
+
+	def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self, extr_id, volume):
+		"""Estimate the spool change for a given extrusion ID and volume."""
+		# Placeholder for actual implementation
+		logging.info(f"Estimating spool change for extrusion ID: {extr_id}, volume: {volume}")
 
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		try:
-			self.additional_pre_print_checks = self.server.lookup_component("additional_pre_print_checks")
+			self.additional_pre_print_checks : AdditionalPrePrintChecks = self.server.lookup_component("additional_pre_print_checks")
 		except Exception as e:
 			raise self.config.error(f"[{self.config.get_name()}]: {e}")
 		logging.info("Spool Change Estimator component initialized")
 
 
-	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Check Failed") -> None:
-		self.additional_pre_print_checks._log_to_console(msg, severity, reason)
+
+
+	async def _log_to_console(self, msg: str = "Empty message", severity: str = "info", reason: str = "Spool Change Estimate Fail") -> None:
+		await self.additional_pre_print_checks._log_to_console(msg, severity, reason)
 
 def load_component(config: ConfigHelper) -> SpoolChangeEstimator:
 	return SpoolChangeEstimator(config)
