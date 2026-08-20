@@ -156,7 +156,7 @@ class AdditionalPrePrintChecks:
 			# if leading or trailing zeros are missing, add them
 			self.work_hours_start = time.fromisoformat(self.work_hours_start.zfill(5))
 			self.work_hours_end = time.fromisoformat(self.work_hours_end.zfill(5))
-
+			self.spool_runouts: Optional[List[RunoutEstimate]] = None
 
 		self.multi_tool_mapping =  False
 		self.filename = None
@@ -276,7 +276,7 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Failed to get current filename: {e}")
 			self.filename = None
 
-	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Check Failed", force_error_dialog=False) -> None:
+	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Checks", force_error_dialog=False) -> None:
 		"""
 		Send message to Klipper console with appropriate severity
 		(heavily inspired by ratos see console_echo in ratos.py)
@@ -305,7 +305,10 @@ class AdditionalPrePrintChecks:
 		if (severity == 'debug'):
 			logging.debug(reason + ": " + msg)
 
-		_title = '<p style="font-weight: bold; margin:0; opacity:' + str(opacity) + '; color:' + color + '">' + reason + '</p>'
+		if reason :
+			_title = '<p style="font-weight: bold; margin:0; opacity:' + str(opacity) + '; color:' + color + '">' + reason + '</p>'
+		else :
+			_title = ''
 		if msg:
 			_msg = '<p style="margin:0; opacity:' + str(opacity) + '; color:' + color + '">' + msg + '</p>'
 		else:
@@ -655,12 +658,14 @@ class AdditionalPrePrintChecks:
 				await self._log_to_console(f"Spool {current_spool_id} has no filament name data, skipping check", "info")
 				continue
 
-			oob_runouts = self._get_oob_runouts(self.estimate_runouts(
+
+			self.spool_runouts = self.estimate_runouts(
 				current_remaining_g=remaining_weight,
 				density=density,
 				spool_size_g=weight,
 				start_volume=0
-			))
+			)
+			oob_runouts = self._get_oob_runouts(self.spool_runouts)
 
 			if not oob_runouts:
 				msg = f"\nFilament spool runouts Check PASSED: Spool {current_spool_id} name '{spool_filament_name}' runs out within work hours"
@@ -754,13 +759,20 @@ class AdditionalPrePrintChecks:
 					all_ok = False
 
 				if all_ok:
-					await self._log_to_console("✓ All pre-print checks PASSED", "info")
+					await self._log_to_console("✓ All pre-print checks PASSED", "success", reason='')
 					if self.enable_filament_name_check:
-						await self._log_to_console("   ✓ filament name compliance check passed", "info")
+						await self._log_to_console("   ✓ filament name compliance check passed", "success", reason='')
 					if self.enable_material_check:
-						await self._log_to_console("   ✓ material compliance check passed", "info")
+						await self._log_to_console("   ✓ material compliance check passed", "success", reason='')
 					if self.enable_weight_check:
-						await self._log_to_console("   ✓ sufficient filament available", "info")
+						await self._log_to_console("   ✓ sufficient filament available", "success", reason='')
+					if self.enable_spool_change_on_work_hours_check:
+						if self.spool_runouts:
+							mess = f"   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})"
+						else :
+							mess = f"   ✓ No spool runouts detected"
+						await self._log_to_console(mess, reason='')
+
 				else:
 					# Pause the print
 					try:
@@ -773,6 +785,7 @@ class AdditionalPrePrintChecks:
 				# Clear cache after checks complete
 				self._clear_spool_cache()
 				self.error_body = []
+				self.spool_runouts = None
 		except Exception as e:
 			msg = f"Unexpected error during pre-print checks: {e}"
 			logging.error(msg)
