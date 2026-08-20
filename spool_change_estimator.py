@@ -40,6 +40,8 @@ class SpoolChangeEstimator:
 		if not self.additional_pre_print_checks.enabled:
 			await self._log_to_console("Additional Pre-Print Checks component is not enabled. Spool Change Estimator will not function properly.", "warning", "Spool Change Estimator Initialization")
 
+		self.additional_pre_print_checks.estimate_runouts(current_remaining_g=, density, spool_size_g, start_layer, extr_id=extr_id)
+
 	async def component_init(self) -> None:
 		"""Initialize component"""
 		try:
