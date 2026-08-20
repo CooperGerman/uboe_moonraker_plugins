@@ -66,7 +66,14 @@ class ExtrusionPoints:
         self.points: list[ExtrusionSamplePoint] = []
         if dict_init is not None:
             for point_dict in dict_init:
-                point = ExtrusionSamplePoint(**point_dict)
+                __temp = {}
+                __temp['line_number'] = int(point_dict.get('line_number'))
+                __temp['extruded_volume_mm3'] = float(point_dict.get('extruded_volume_mm3'))
+                __temp['minutes_remaining'] = float(point_dict.get('minutes_remaining'))
+                __temp['progress_percent'] = float(point_dict.get('progress_percent'))
+                __temp['layer'] = int(point_dict.get('layer'))
+                __temp['extr_id'] = int(point_dict.get('extr_id'))
+                point = ExtrusionSamplePoint(**__temp)
                 self.points.append(point)
 
     def add_point(self, point: ExtrusionSamplePoint):
@@ -90,6 +97,15 @@ class ExtrusionPoints:
 
     def to_dict(self) -> list[dict]:
         return [point.to_dict() for point in self.points]
+
+    def has_point(self, extr_id: int, volume: float) -> list[ExtrusionSamplePoint]:
+        """Get all points starting from the given extr_id and volume."""
+        for i, point in enumerate(self.points):
+            if int(point.extr_id) == int(extr_id) and float(point.extruded_volume_mm3) == float(volume):
+                return True
+        logging.warning(f"No points found starting from extruder ID {extr_id} and volume {volume}.")
+        logging.warning(f"Searched points: {[p.to_dict() for p in self.points]}")
+        return False
 
 class UboeMetadata:
     def __init__(self, config: ConfigHelper) -> None:
