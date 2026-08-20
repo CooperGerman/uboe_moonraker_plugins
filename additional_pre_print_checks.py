@@ -276,7 +276,7 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Failed to get current filename: {e}")
 			self.filename = None
 
-	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Checks", force_error_dialog=False) -> None:
+	async def _log_to_console(self, msg: str, severity: str = "info", reason: str = "Pre-Print Checks", popup=False) -> None:
 		"""
 		Send message to Klipper console with appropriate severity
 		(heavily inspired by ratos see console_echo in ratos.py)
@@ -321,8 +321,8 @@ class AdditionalPrePrintChecks:
 				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
 			else:
 				msg = msg.replace("\n", "\\n")
-				if severity == "error" or force_error_dialog:
-					await self.klippy_apis.run_gcode('_UBOE_ERROR_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
+				if popup :
+					await self.klippy_apis.run_gcode('_UBOE_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
 				else :
 					await self.klippy_apis.run_gcode(f"M118 <div>{_title}{_msg}</div>")
 		except Exception as e:
@@ -771,7 +771,7 @@ class AdditionalPrePrintChecks:
 							mess = f"   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})"
 						else :
 							mess = f"   ✓ No spool runouts detected"
-						await self._log_to_console(mess, reason='')
+						await self._log_to_console(mess, "success", reason='')
 
 				else:
 					# Pause the print
@@ -780,7 +780,7 @@ class AdditionalPrePrintChecks:
 					except Exception as e:
 						logging.error(f"Failed to pause print: {e}")
 					logging.error(f'Errors : {self.error_body}')
-					await self._log_to_console(msg=(".\n".join(self.error_body)), reason="Pre-Print Check Failed", severity="error")
+					await self._log_to_console(msg=(".\n".join(self.error_body)), reason="Pre-Print Check Failed", severity="error", popup=True)
 			finally:
 				# Clear cache after checks complete
 				self._clear_spool_cache()
@@ -793,7 +793,7 @@ class AdditionalPrePrintChecks:
 				await self.klippy_apis.pause_print()
 			except Exception as e:
 				logging.error(f"Failed to pause print: {e}")
-			await self._log_to_console(msg=msg, reason="Pre-Print Check Failed", severity="error")
+			await self._log_to_console(msg=msg, reason="Pre-Print Check Failed", severity="error", popup=True)
 
 def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
 	return AdditionalPrePrintChecks(config)
