@@ -79,9 +79,10 @@ class SpoolChangeEstimator:
 			return
 
 		nxt_runout = runouts[0]
+		eta = (datetime.now() + timedelta(minutes=nxt_runout.estimated_minutes_from_now))
 		await self._log_to_console(f"Estimated spool change for extruder {extr_id} is:", "info")
 		await self._log_to_console(f"   in {nxt_runout.estimated_minutes_from_now:.2f} min ({str(timedelta(minutes=nxt_runout.estimated_minutes_from_now))[:-3]})", "info", reason='')
-		await self._log_to_console(f"   ETA : {nxt_runout.eta.strftime('%Y-%m-%d %H:%M:%S')}", "info", reason='')
+		await self._log_to_console(f"   ETA : {eta.strftime('%Y-%m-%d %H:%M:%S')}", "info", reason='')
 		await self._log_to_console(f"   layer : {nxt_runout.estimated_layer}", "info", reason='')
 
 	async def component_init(self) -> None:
