@@ -373,10 +373,12 @@ class AdditionalPrePrintChecks:
 		runouts: list[RunoutEstimate] = []
 		runout_idx = 1
 
-		target_volume = start_volume + current_remaining_g / (density / 1000) # Convert grams to mm³ using filament density
+		elapsed = closest_point(start_volume, extr_id)
+
+		target_volume = start_volume + current_remaining_g / (density / 1000.0) # Convert grams to mm³ using filament density
 		logging.info(f"Estimating runouts starting from volume {start_volume:.2f} mm³, current remaining {current_remaining_g:.2f}g, target volume {target_volume:.2f} mm³, max volume {max_volume:.2f} mm³")
 		while target_volume <= max_volume:
-			closest = closest_point(target_volume)
+			closest = closest_point(target_volume, extr_id)
 			if closest is None:
 				break
 			layer = closest.layer
@@ -387,14 +389,14 @@ class AdditionalPrePrintChecks:
 					runout_index=runout_idx,
 					target_volume_mm3=target_volume,
 					estimated_minutes_remaining=eta_remaining,
-					estimated_minutes_from_now=eta_remaining,
+					estimated_minutes_from_now=elapsed.minutes_remaining - eta_remaining,
 					estimated_progress_percent=eta_progress,
 					estimated_layer=layer,
 					tool_number=extr_id
 				)
 			)
 			runout_idx += 1
-			target_volume += spool_size_g / (density / 1000) # Assuming single filament density for simplicity
+			target_volume += spool_size_g / (density / 1000.0) # Assuming single filament density for simplicity
 
 		return runouts
 
