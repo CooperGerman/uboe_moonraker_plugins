@@ -344,11 +344,15 @@ class AdditionalPrePrintChecks:
 		Otherwise, starts from the first parsed point.
 		"""
 
-		def closest_point(target_volume_mm3: float) -> int | None:
+		def closest_point(target_volume_mm3: float, tool_number: int) -> int | None:
 			"""Find the layer value at the closest point to the target cumulative extruded volume."""
 			if not self.extracted_metadata.extrusion_sample_points:
 				return None
-			closest_point = min(self.extracted_metadata.extrusion_sample_points, key=lambda p: abs(p.extruded_volume_mm3 - target_volume_mm3))
+			closest_point = min(
+				(p for p in self.extracted_metadata.extrusion_sample_points if p.extr_id == tool_number),
+				key=lambda p: abs(p.extruded_volume_mm3 - target_volume_mm3),
+				default=None
+			)
 			return closest_point
 
 		def get_max_volume_for_tool(tool_number: int) -> float:
