@@ -62,6 +62,8 @@ class SpoolChangeEstimator:
 
 		# start sample point for estimation (get from volume and extr_id associated to sample point)
 		if not self.additional_pre_print_checks.extracted_metadata:
+			await self.additional_pre_print_checks._prep_checks()
+		if not self.additional_pre_print_checks.extracted_metadata:
 			await self._log_to_console("No extracted metadata found. Cannot estimate spool change.", "error")
 			return
 		if not self.additional_pre_print_checks.extracted_metadata.extrusion_sample_points:
