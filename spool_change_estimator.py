@@ -38,8 +38,6 @@ class SpoolChangeEstimator:
 		# cast args to correct types directly
 		extr_id = int(extr_id)
 		volume = float(volume)
-		# Placeholder for actual implementation
-		await self._log_to_console(f"Estimating spool change for extruder ID: {extr_id}, volume: {volume}", "info")
 		if not self.additional_pre_print_checks.enabled:
 			await self._log_to_console("Additional Pre-Print Checks component is not enabled. Spool Change Estimator will not function properly.", "warning", "Spool Change Estimator Initialization")
 		# get current remaining from active spool (spoolman)
@@ -75,7 +73,7 @@ class SpoolChangeEstimator:
 
 		runouts = self.additional_pre_print_checks.estimate_runouts(current_remaining_g=current_remaining_g, density=density, spool_size_g=spool_size_g, start_volume=volume, extr_id=extr_id)
 		if not runouts:
-			await self._log_to_console(f"No spool change runouts estimated for extruder ID {extr_id} and volume {volume}.", "debug")
+			# await self._log_to_console(f"No spool change runouts estimated for extruder ID {extr_id} and volume {volume}.", "debug")
 			return
 
 		nxt_runout = runouts[0]
