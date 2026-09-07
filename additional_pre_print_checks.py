@@ -542,13 +542,13 @@ class AdditionalPrePrintChecks:
 			tool_range = range(len(self.multi_tool_mapping))
 		else:
 			if self.extracted_metadata.referenced_tools is None:
-				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.", "error")
+				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
 				return False
 			elif len(self.extracted_metadata.referenced_tools) == 0:
-				self.error_body.append("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Skipping weight check.", "warning")
+				self.error_body.append("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Skipping weight check.")
 				return False
 			elif len(self.extracted_metadata.referenced_tools) > 1:
-				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.", "error")
+				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
 				return False
 			tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
