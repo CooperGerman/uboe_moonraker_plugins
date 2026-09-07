@@ -186,7 +186,7 @@ class UboeMetadata:
             from ..utils import json_wrapper as jsonw
             scmd: ShellCommandFactory = self.server.lookup_component("shell_command")
             sc_est_cmd = self._gen_spoolchange_est_cmd(f"{gc_path}/{fname}")
-            ret = await scmd.exec_cmd(sc_est_cmd, 20.)
+            ret = await scmd.exec_cmd(sc_est_cmd, 60.)
             extrusion_sample_points = ExtrusionPoints(dict_init=jsonw.loads(ret))
             logging.debug(f"UboeMetadata: Extracted spool change estimate data for {fname}: {extrusion_sample_points}")
             # Keep points with strictly increasing cumulative weight for interpolation.
