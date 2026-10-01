@@ -14,7 +14,7 @@ import pathlib
 import shlex
 import argparse
 from packaging.version import Version
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Iterable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
@@ -204,8 +204,9 @@ class UboeMetadata:
 
             if len(extrusion_sample_points.points) < 2:
                 logging.warning(
-                    "Could not extract enough paired points. Make sure the file contains both "
-                    "UBOE_SPOOL_CHANGE_ESTIMATE V=..., M73 R... entries and _ON_LAYER_CHANGE LAYER=... entries."
+                    "Could not extract enough paired points. Make sure OrcaSlicer runs "
+                    "~/.local/bin/orca-post-proc-script and appends the "
+                    "UBOE_EXTRUSION_SAMPLE_POINTS footer."
                 )
 
         updated["extrusion_sample_points"] = extrusion_sample_points.to_dict()
@@ -213,53 +214,53 @@ class UboeMetadata:
         gc_metadata.insert(fname, updated)
 
 def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
-    # function should work with mock files for testing, so we define a helper function to iterate over lines
-    def _iter_lines() -> Iterable[tuple[int, str]]:
-        with open(f"{gc_path}", "r") as f:
-            for idx, line in enumerate(f, start=1):
-                yield idx, line
-    logging.info("Extracting extrusion sample points from gcode file...")
-    LAY = re.compile(r'BEFORE_LAYER_CHANGE\b[^\n\r]*\bHEIGHT\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*LAYER\s*=\s*([0-9]+)')
-    # UBOE_SPOOL_CHANGE_ESTIMATE volume is scientific notation, so we need to handle that
-    CHG_EST_CMD = re.compile(r"UBOE_SPOOL_CHANGE_ESTIMATE\b[^\n\r]*\bEXTR_ID\s*[:=]\s*([0-9]+)\s*\b[^\n\r]*\bV\s*[:=]\s*([^\s]+)")
-    M73_RE = re.compile(r"\bM73\b(?:[^\n\r]*\bP([0-9]+(?:\.[0-9]+)?))?[^\n\r]*\bR([0-9]+(?:\.[0-9]+)?)")
-
-    pending_volume: float = None
-    pending_extr_id: int = None
-    current_layer: int = 0
+    logging.info(f"Extracting extrusion sample points from the end of {gc_path}.")
+    sample_points_re = re.compile(
+        r"^\s*;\s*UBOE_EXTRUSION_SAMPLE_POINTS:\s*(\[[^\r\n]*\])\s*$"
+    )
     extrusion_sample_points = ExtrusionPoints()
 
-    for line_number, line in _iter_lines():
-        lay_match = LAY.search(line)
-        if lay_match:
-            current_layer = int(lay_match.group(2))
-            logging.debug(f"Line {line_number}: Found layer change to layer {current_layer}.")
+    try:
+        with open(gc_path, "rb") as gcode_file:
+            gcode_file.seek(0, 2)
+            file_size = gcode_file.tell()
+            gcode_file.seek(max(0, file_size - 1024 * 1024))
+            footer = gcode_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        logging.warning(
+            f"UboeMetadata: Unable to read extrusion sample point footer from {gc_path}",
+            exc_info=True,
+        )
+        return extrusion_sample_points
 
-        volume_match = CHG_EST_CMD.search(line)
-        if volume_match:
-            pending_extr_id = int(volume_match.group(1))
-            pending_volume = float(volume_match.group(2))
-            logging.debug(f"Line {line_number}: Found volume {pending_volume} mm³ for extruder ID {pending_extr_id}.")
+    footer_line = next(
+        (line for line in reversed(footer.splitlines()) if line.strip()),
+        None,
+    )
+    marker_match = sample_points_re.fullmatch(footer_line) if footer_line else None
+    if marker_match is None:
+        logging.warning(
+            f"UboeMetadata: No UBOE_EXTRUSION_SAMPLE_POINTS footer found in {gc_path}; "
+            "spool-change sample points are unavailable."
+        )
+        return extrusion_sample_points
 
-        m73_match = M73_RE.search(line)
-        if m73_match:
-            last_progress = float(m73_match.group(1)) if m73_match.group(1) else 0.0
-            last_remaining = float(m73_match.group(2))
-            logging.debug(f"Line {line_number}: Found M73 progress {last_progress}% with remaining {last_remaining} minutes.")
+    try:
+        point_data = json.loads(marker_match.group(1))
+        if not isinstance(point_data, list):
+            raise ValueError("sample point marker must contain a JSON list")
+        extrusion_sample_points = ExtrusionPoints(dict_init=point_data)
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        logging.warning(
+            f"UboeMetadata: Invalid UBOE_EXTRUSION_SAMPLE_POINTS footer in {gc_path}; "
+            "spool-change sample points are unavailable.",
+            exc_info=True,
+        )
+        return ExtrusionPoints()
 
-        if pending_volume is not None:
-            extrusion_sample_points.add_point(
-                ExtrusionSamplePoint(
-                    line_number=line_number,
-                    extruded_volume_mm3=pending_volume,
-                    minutes_remaining=last_remaining,
-                    progress_percent=last_progress,
-                    layer=current_layer,
-                    extr_id=pending_extr_id
-                )
-            )
-            pending_volume = None  # Clear the pending volume for this extruder ID
-
+    logging.debug(
+        f"UboeMetadata: Loaded {len(extrusion_sample_points)} extrusion sample points from {gc_path}."
+    )
     return extrusion_sample_points
 
 
