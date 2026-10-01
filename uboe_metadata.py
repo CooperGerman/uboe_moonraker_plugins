@@ -193,7 +193,7 @@ class UboeMetadata:
             non_monotonic_points: list[ExtrusionSamplePoint] = []
             prev_point: ExtrusionSamplePoint = None
             for i, point in enumerate(extrusion_sample_points.points):
-                if i > 0 and point.extruded_volume_mm3 < prev_point.extruded_volume_mm3:
+                if i > 0 and point.extr_id == prev_point.extr_id and point.extruded_volume_mm3 < prev_point.extruded_volume_mm3:
                     non_monotonic_points.append(point)
                     logging.warning(f"{point.to_dict()} is non-monotonic and will be ignored for interpolation.")
                     logging.warning(f"Previous point was {prev_point.to_dict()}.")
