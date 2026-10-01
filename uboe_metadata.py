@@ -245,6 +245,19 @@ def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
         )
         return extrusion_sample_points
 
+    marker_match = None
+    for line in reversed(footer.splitlines()):
+        marker_match = sample_points_re.fullmatch(line.strip())
+        if marker_match:
+            break
+
+    if marker_match is None:
+        logging.warning(
+            f"UboeMetadata: No UBOE_EXTRUSION_SAMPLE_POINTS footer found in {gc_path}; "
+            "spool-change sample points are unavailable."
+        )
+        return extrusion_sample_points
+
     try:
         point_data = json.loads(marker_match.group(1))
         if not isinstance(point_data, list):
