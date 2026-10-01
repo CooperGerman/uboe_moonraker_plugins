@@ -186,9 +186,13 @@ class UboeMetadata:
             scmd: ShellCommandFactory = self.server.lookup_component("shell_command")
             sc_est_cmd = self._gen_spoolchange_est_cmd(f"{gc_path}/{fname}")
             ret = await scmd.exec_cmd(sc_est_cmd, 60.)
-            logging.info(f"UboeMetadata: Raw spool change estimate command output for {fname}: {ret}")
-            extrusion_sample_points = ExtrusionPoints(dict_init=json.loads(ret))
-            logging.debug(f"UboeMetadata: Extracted spool change estimate data for {fname}: {extrusion_sample_points}")
+            # if the script exited with an exception, ret might not contain valid JSON
+            # and json.loads(ret) could raise an error
+            try:
+                extrusion_sample_points = ExtrusionPoints(dict_init=json.loads(ret))
+            except json.JSONDecodeError:
+                logging.error(f"UboeMetadata: Failed to decode JSON from spool change estimate command output for {fname}: {ret}")
+                return
             # Keep points with strictly increasing cumulative weight for interpolation.
             non_monotonic_points: list[ExtrusionSamplePoint] = []
             prev_point: ExtrusionSamplePoint = None
@@ -210,7 +214,7 @@ class UboeMetadata:
                 )
 
         updated["extrusion_sample_points"] = extrusion_sample_points.to_dict()
-
+        logging.info(f"UboeMetadata: Updated metadata with extrusion sample points for {fname}.")
         gc_metadata.insert(fname, updated)
 
 def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
@@ -227,23 +231,7 @@ def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
             gcode_file.seek(max(0, file_size - 1024 * 1024))
             footer = gcode_file.read().decode("utf-8", errors="replace")
     except OSError:
-        logging.warning(
-            f"UboeMetadata: Unable to read extrusion sample point footer from {gc_path}",
-            exc_info=True,
-        )
-        return extrusion_sample_points
-
-    footer_line = next(
-        (line for line in reversed(footer.splitlines()) if line.strip()),
-        None,
-    )
-    marker_match = sample_points_re.fullmatch(footer_line) if footer_line else None
-    if marker_match is None:
-        logging.warning(
-            f"UboeMetadata: No UBOE_EXTRUSION_SAMPLE_POINTS footer found in {gc_path}; "
-            "spool-change sample points are unavailable."
-        )
-        return extrusion_sample_points
+        raise OSError(f"Unable to read GCode file: {gc_path}")
 
     marker_match = None
     for lines_scanned, line in enumerate(reversed(footer.splitlines()), start=1):
@@ -254,11 +242,7 @@ def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
             break
 
     if marker_match is None:
-        logging.warning(
-            f"UboeMetadata: No UBOE_EXTRUSION_SAMPLE_POINTS footer found in the last 100 lines of {gc_path}; "
-            "spool-change sample points are unavailable."
-        )
-        return extrusion_sample_points
+        raise ValueError(f"No UBOE_EXTRUSION_SAMPLE_POINTS footer found in the last 100 lines of {gc_path}")
 
     try:
         point_data = json.loads(marker_match.group(1))
@@ -266,16 +250,8 @@ def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
             raise ValueError("sample point marker must contain a JSON list")
         extrusion_sample_points = ExtrusionPoints(dict_init=point_data)
     except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        logging.warning(
-            f"UboeMetadata: Invalid UBOE_EXTRUSION_SAMPLE_POINTS footer in {gc_path}; "
-            "spool-change sample points are unavailable.",
-            exc_info=True,
-        )
-        return ExtrusionPoints()
+        raise ValueError(f"Invalid UBOE_EXTRUSION_SAMPLE_POINTS footer in {gc_path}")
 
-    logging.debug(
-        f"UboeMetadata: Loaded {len(extrusion_sample_points)} extrusion sample points from {gc_path}."
-    )
     return extrusion_sample_points
 
 
