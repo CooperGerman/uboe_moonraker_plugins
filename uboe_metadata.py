@@ -225,7 +225,7 @@ class UboeMetadata:
 def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
     logging.info(f"Extracting extrusion sample points from the end of {gc_path}.")
     sample_points_re = re.compile(
-        r"^\s*;\s*UBOE_EXTRUSION_SAMPLE_POINTS:\s*(\[[^\r\n]*\])\s*$"
+        r"^[ \t]*;[ \t]*UBOE_EXTRUSION_SAMPLE_POINTS:[ \t]*(\[[^\r\n]*\])[ \t]*$"
     )
     extrusion_sample_points = ExtrusionPoints()
 
@@ -233,16 +233,34 @@ def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
         with open(gc_path, "rb") as gcode_file:
             gcode_file.seek(0, 2)
             file_size = gcode_file.tell()
-            gcode_file.seek(max(0, file_size - 1024 * 1024))
-            footer = gcode_file.read().decode("utf-8", errors="replace")
+            gcode_file.seek(max(0, file_size - 1))
+            has_trailing_newline = gcode_file.read(1) == b"\n"
+
+            chunks = []
+            position = file_size
+            newline_count = 0
+            required_newlines = 100 + has_trailing_newline
+            while position > 0 and newline_count < required_newlines:
+                chunk_start = max(0, position - 64 * 1024)
+                gcode_file.seek(chunk_start)
+                chunk = gcode_file.read(position - chunk_start)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+                position = chunk_start
+
+            footer = b"".join(reversed(chunks))
+            if newline_count >= required_newlines:
+                cutoff = len(footer)
+                for _ in range(required_newlines):
+                    cutoff = footer.rfind(b"\n", 0, cutoff)
+                footer = footer[cutoff + 1:]
+            footer = footer.decode("utf-8", errors="replace")
     except OSError:
         raise OSError(f"Unable to read GCode file: {gc_path}")
 
     marker_match = None
-    for lines_scanned, line in enumerate(reversed(footer.splitlines()), start=1):
-        if lines_scanned > 100:
-            break
-        marker_match = sample_points_re.fullmatch(line.strip())
+    for line in reversed(footer.splitlines()):
+        marker_match = sample_points_re.search(line)
         if marker_match:
             break
 
