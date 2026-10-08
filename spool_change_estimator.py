@@ -58,19 +58,37 @@ class SpoolChangeEstimator:
 	async def _handle_klippy_ready(self) -> None:
 		result: Dict[str, Dict[str, Any]]
 		result = await self.klippy_apis.subscribe_objects(
-			{"toolhead": ["position", "extruder"]}, await self._handle_status_update, {}
+			{"toolhead": ["position", "extruder"]}, self._handle_status_update, {}
 		)
 		toolhead = result.get("toolhead", {})
-		self._current_extruder = toolhead.get("extruder", "extruder")
+		self._current_extr = toolhead.get("extruder")
 		initial_e_pos = toolhead.get("position", [None]*4)[3]
 		logging.debug(f"Initial epos: {initial_e_pos}")
 		if initial_e_pos is not None:
-			self._highest_epos = initial_e_pos
+			self._highest_epos[self._current_extr] = initial_e_pos
 		else:
 			logging.error("Spool change estimator integration unable to subscribe to epos")
 			raise self.server.error("Unable to subscribe to e position")
 
-	def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
+		# if a print is already ongoing we need to initialize everything for scheduled estimations to trigger
+		result = await self.klippy_apis.query_objects({"print_stats": ["state"]}, {})
+		state = result.get("print_stats", {}).get("state")
+		if state is not None:
+			logging.debug(f"Initializing klipper ready with current state being {state}")
+			self._on_job_state_changed(state)
+		else :
+			logging.error("Unable to determine current print state during klippy ready initialization")
+			raise self.server.error("Unable to determine current print state during klippy ready initialization")
+
+	async def ensure_prep_checks(self) -> bool:
+		if not self._prep_checks_ok:
+			self._prep_checks_ok = await self.additional_pre_print_checks._prep_checks()
+			if self._prep_checks_ok:
+				logging.debug(f"Preparation checks passed. {self.additional_pre_print_checks.extracted_metadata.referenced_tools} referenced tools found.")
+				self.cumulated_length = [0]*len(self.additional_pre_print_checks.extracted_metadata.referenced_tools)
+		return self._prep_checks_ok
+
+	async def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
 		callback: Optional[Callable] = getattr(self, f"_on_print_{job_event}", None)
 		if callback is not None:
 			callback(*args)
@@ -83,37 +101,50 @@ class SpoolChangeEstimator:
 		consumption reactor. It should fire a cmd_UBOE_SPOOL_CHANGE_ESTIMATE every
 		X meters of filament consumed.
 		'''
-		self.cumulated_length = 0
-		await self.additional_pre_print_checks._prep_checks()
+		self.printing = True
+		await self.ensure_prep_checks()
 
 	async def _on_print_end(self, *args) -> None:
+		self.printing = False
 		'''
 		Callback for when a print ends. In this case reset the extruder length
 		consumption reactor.
 		'''
-		self.cumulated_length = 0
+		self.cumulated_length = []
+		self._highest_epos = {}
+		self._prep_checks_ok = False
 
 	async def _handle_status_update(self, status: Dict[str, Any], _: float) -> None:
+		if not self.printing:
+			return
 		toolhead: Optional[Dict[str, Any]] = status.get("toolhead")
 		if toolhead is None:
 			return
-		epos: float = toolhead.get("position", [0, 0, 0, self._highest_epos])[3]
-		self._last_epos = epos
-		extr = toolhead.get("extruder", self._current_extruder)
-		if extr != self._current_extruder:
-			self._highest_epos = epos
-			self._current_extruder = extr
-		elif epos > self._highest_epos:
-			self.cumulated_length = (self.cumulated_length ) + (epos - self._highest_epos)
-			self._highest_epos = epos
-			if self.cumulated_length >= self.trigger_distance:
+		extr = toolhead.get("extruder", self._current_extr)
+		# add current extruder to the watchlist if not already present
+		if not extr in self._highest_epos:
+			self._highest_epos[extr] = 0
+		# get the current extruder position, defaulting to the highest recorded position for this extruder
+		epos: float = toolhead.get("position", [0, 0, 0, self._highest_epos.get(extr)])[3]
+		logging.debug(f"Status update received while printing. Current extruder: {extr}, position: {epos}")
+		if epos > self._highest_epos.get(extr, 0):
+			self.cumulated_length[self._current_extr_id] = (self.cumulated_length[self._current_extr_id] ) + (epos - self._highest_epos.get(extr, 0))
+			self._highest_epos[extr] = epos
+			if self.cumulated_length[self._current_extr_id] >= self.trigger_distance:
+				logging.info(f"Triggering spool change estimate for extruder {extr}")
 				await self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE()
+				self.cumulated_length[self._current_extr_id] = 0
 
-	async def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self, extr_id, volume) -> None:
+	async def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self) -> None:
 		"""Estimate the spool change for a given extruder ID and volume."""
+		if not self.printing:
+			await self._log_to_console(f"No print is currently active. Cannot estimate spool change.", "warning")
+			return
 		# cast args to correct types directly
-		extr_id = int(extr_id)
-		volume = float(volume)
+		extr_id = self._current_extr_id
+		# calc volume from length knowing the filament is 1.75mm in diameter
+		volume = self._highest_epos.get(self._current_extr) * (3.141592653589793 * (1.75 / 2) ** 2)
+
 		if not self.additional_pre_print_checks.enabled:
 			await self._log_to_console("Additional Pre-Print Checks component is not enabled. Spool Change Estimator will not function properly.", "warning", "Spool Change Estimator Initialization")
 		# get current remaining from active spool (spoolman)
@@ -136,7 +167,7 @@ class SpoolChangeEstimator:
 
 		# start sample point for estimation (get from volume and extr_id associated to sample point)
 		if not self.additional_pre_print_checks.extracted_metadata:
-			await self.additional_pre_print_checks._prep_checks()
+			await self.ensure_prep_checks()
 		if not self.additional_pre_print_checks.extracted_metadata:
 			await self._log_to_console("No extracted metadata found. Cannot estimate spool change.", "error")
 			return
@@ -165,7 +196,6 @@ class SpoolChangeEstimator:
 			self.additional_pre_print_checks : AdditionalPrePrintChecks = self.server.lookup_component("additional_pre_print_checks")
 		except Exception as e:
 			raise self.config.error(f"[{self.config.get_name()}]: {e}")
-		logging.info("Spool Change Estimator component initialized")
 
 	async def _log_to_console(self, msg: str = "Empty message", severity: str = "info", reason: str = "Spool Change Estimate", popup: bool = False) -> None:
 		await self.additional_pre_print_checks._log_to_console(msg, severity, reason, popup=popup)
