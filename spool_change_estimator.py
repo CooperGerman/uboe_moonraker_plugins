@@ -91,9 +91,31 @@ class SpoolChangeEstimator:
 	async def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
 		callback: Optional[Callable] = getattr(self, f"_on_print_{job_event}", None)
 		if callback is not None:
-			callback(*args)
+			logging.debug(f"Handling job event: {job_event}")
+			await callback(*args)
 		else:
 			logging.info(f"No defined callback for Job Event: {job_event}")
+
+	async def _on_print_cancelled(self, *args) -> None:
+		await self._on_print_end(*args)
+
+	async def _on_print_error(self, *args) -> None:
+		await self._on_print_end(*args)
+
+	async def _on_print_standby(self, *args) -> None:
+		await self._on_print_end(*args)
+
+	async def _on_print_paused(self, *args) -> None:
+		self.printing = False
+
+	async def _on_print_resumed(self, *args) -> None:
+		await self._on_print_started(*args)
+
+	async def _on_print_complete(self, *args) -> None:
+		await self._on_print_end(*args)
+
+	async def _on_print_printing(self, *args) -> None:
+		await self._on_print_started(*args)
 
 	async def _on_print_started(self, *args) -> None:
 		'''
