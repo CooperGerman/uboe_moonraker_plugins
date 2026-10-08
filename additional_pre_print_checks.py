@@ -115,7 +115,10 @@ class ExtractedMetadata:
 		return names
 
 	def _parse_referenced_tools(self) -> Optional[List[int]]:
-		tools = self.raw_metadata.get('referenced_tools')
+		tools = self.raw_metadata.get('referenced_tools', None)
+		logging.debug(f"Raw metadata referenced tools: {tools}")
+		if tools == []:
+			tools = 0 # !FIXME : mmu_server should not write "; referenced_tools = "
 		if tools is None:
 			self.error_body.append("No referenced tool data in file metadata, warnings and errors might be inaccurate")
 			return None
@@ -712,16 +715,15 @@ class AdditionalPrePrintChecks:
 			self.error_body.append("Pre-print checks skipped: No filename available")
 			return False
 
-		# Check if MMU mode
-		self._is_hh_enabled()
-		mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
-		logging.info(f"Running {mode} pre-print checks for file: {self.filename}")
-		await self._log_to_console(f"Running {mode} checks for: {self.filename}", "info")
-
 		# Clear cache at start of check session
 		self._clear_spool_cache()
 
+		_nb_errors = len(self.error_body)
 		self.extracted_metadata = ExtractedMetadata(self.metadata_storage, self.filename, self.error_body)
+		if len(self.error_body) > _nb_errors:
+			logging.error(f"Errors found during preparation checks: {self.error_body[_nb_errors:]}")
+			return False
+
 		return True
 
 	async def run_checks(self, tool_gate_map=None) -> None:
@@ -740,6 +742,11 @@ class AdditionalPrePrintChecks:
 			logging.info(f"tool_gate_map: {tool_gate_map}")
 
 			pre_checks_ok = await self._prep_checks(tool_gate_map)
+			# Check if MMU mode
+			self._is_hh_enabled()
+			mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
+			logging.info(f"Running {mode} pre-print checks for file: {self.filename}")
+			await self._log_to_console(f"Running {mode} checks for: {self.filename}", "info")
 
 			# #######################################
 			# Run the checks
