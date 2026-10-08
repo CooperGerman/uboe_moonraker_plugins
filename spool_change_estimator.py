@@ -8,10 +8,11 @@ import logging
 import asyncio
 from logging import config, error
 import os
-from typing import TYPE_CHECKING, Dict, Any, Optional, List
+from typing import TYPE_CHECKING, Dict, Any, Optional, List, Callable
 from packaging.version import Version
 from datetime import datetime, time, timedelta
 from .additional_pre_print_checks import AdditionalPrePrintChecks
+from ..common import JobEvent
 from ..components.uboe_metadata import ExtrusionPoints
 
 if TYPE_CHECKING:
@@ -28,10 +29,77 @@ class SpoolChangeEstimator:
 	def __init__(self, config: ConfigHelper):
 		self.config = config
 		self.server = config.get_server()
+
+		self.trigger_distance = config.getint("trigger_distance", default=5, minval=1)
+
+		self._current_extruder = None
+		self._highest_epos = None
+		self.cumulated_length = 0
+
 		self.server.register_remote_method(
 			"uboe_spool_change_estimate",
 			self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE
 		)
+
+		self.server.register_event_handler(
+			"server:klippy_ready", self._handle_klippy_ready
+		)
+		self.server.register_event_handler(
+			"job_state:state_changed", self._on_job_state_changed)
+
+	async def _handle_klippy_ready(self) -> None:
+		result: Dict[str, Dict[str, Any]]
+		result = await self.klippy_apis.subscribe_objects(
+			{"toolhead": ["position", "extruder"]}, await self._handle_status_update, {}
+		)
+		toolhead = result.get("toolhead", {})
+		self._current_extruder = toolhead.get("extruder", "extruder")
+		initial_e_pos = toolhead.get("position", [None]*4)[3]
+		logging.debug(f"Initial epos: {initial_e_pos}")
+		if initial_e_pos is not None:
+			self._highest_epos = initial_e_pos
+		else:
+			logging.error("Spool change estimator integration unable to subscribe to epos")
+			raise self.server.error("Unable to subscribe to e position")
+
+	def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
+		callback: Optional[Callable] = getattr(self, f"_on_print_{job_event}", None)
+		if callback is not None:
+			callback(*args)
+		else:
+			logging.info(f"No defined callback for Job Event: {job_event}")
+
+	async def _on_print_started(self, *args) -> None:
+		'''
+		Callback for when a print starts. In this case register the extruder length
+		consumption reactor. It should fire a cmd_UBOE_SPOOL_CHANGE_ESTIMATE every
+		X meters of filament consumed.
+		'''
+		self.cumulated_length = 0
+		await self.additional_pre_print_checks._prep_checks()
+
+	async def _on_print_end(self, *args) -> None:
+		'''
+		Callback for when a print ends. In this case reset the extruder length
+		consumption reactor.
+		'''
+		self.cumulated_length = 0
+
+	async def _handle_status_update(self, status: Dict[str, Any], _: float) -> None:
+		toolhead: Optional[Dict[str, Any]] = status.get("toolhead")
+		if toolhead is None:
+			return
+		epos: float = toolhead.get("position", [0, 0, 0, self._highest_epos])[3]
+		self._last_epos = epos
+		extr = toolhead.get("extruder", self._current_extruder)
+		if extr != self._current_extruder:
+			self._highest_epos = epos
+			self._current_extruder = extr
+		elif epos > self._highest_epos:
+			self.cumulated_length = (self.cumulated_length ) + (epos - self._highest_epos)
+			self._highest_epos = epos
+			if self.cumulated_length >= self.trigger_distance:
+				await self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE()
 
 	async def cmd_UBOE_SPOOL_CHANGE_ESTIMATE(self, extr_id, volume) -> None:
 		"""Estimate the spool change for a given extruder ID and volume."""

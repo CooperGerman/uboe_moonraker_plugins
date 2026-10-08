@@ -688,6 +688,11 @@ class AdditionalPrePrintChecks:
 		return check_passed
 
 	async def _prep_checks(self, tool_gate_map=None) -> None:
+		'''
+		Prepare the environment for running pre-print checks.
+		This includes verifying the availability of required components,
+		initializing metadata extraction, and setting up tool mappings.
+		'''
 		if self.uboe_metadata is None:
 			self.error_body.append(f"[{self.config.get_name()}]: uboe_metadata component is required for Additional Pre-Print Checks plugin, but not found.")
 			return False
