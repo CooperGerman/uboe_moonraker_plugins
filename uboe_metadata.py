@@ -185,7 +185,12 @@ class UboeMetadata:
         async with self.cmd_lock:
             scmd: ShellCommandFactory = self.server.lookup_component("shell_command")
             sc_est_cmd = self._gen_spoolchange_est_cmd(f"{gc_path}/{fname}")
-            ret = await scmd.exec_cmd(sc_est_cmd, 60.)
+            # catch the errors that could have occured running the command
+            try:
+                ret = await scmd.exec_cmd(sc_est_cmd, 60., log_stderr=True)
+            except Exception as e:
+                logging.error(f"UboeMetadata: Error executing uboe_metadata for {fname}")
+                return
             # if the script exited with an exception, ret might not contain valid JSON
             # and json.loads(ret) could raise an error
             try:
