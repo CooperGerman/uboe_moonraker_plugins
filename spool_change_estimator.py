@@ -30,11 +30,19 @@ class SpoolChangeEstimator:
 		self.config = config
 		self.server = config.get_server()
 
-		self.trigger_distance = config.getint("trigger_distance", default=5, minval=1)
+		self.trigger_distance : float = config.getfloat("trigger_distance", default=5, minval=0.05)*1000.0
 
-		self._current_extruder = None
-		self._highest_epos = None
-		self.cumulated_length = 0
+		self.printing = False
+		self._current_extr = None
+		# the id should follow the current extruder number and be updated when the current extruder changes
+		self._current_extr_id = int(self._current_extr.replace("extruder", "") if self._current_extr and self._current_extr.replace("extruder", "") else 0)
+
+		self._highest_epos = {}
+		self.cumulated_length = []
+
+		self._prep_checks_ok = False
+		self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
+		self.idle_timeout_state = None
 
 		self.server.register_remote_method(
 			"uboe_spool_change_estimate",
