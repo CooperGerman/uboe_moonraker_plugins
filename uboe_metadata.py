@@ -23,7 +23,18 @@ if TYPE_CHECKING:
     from .file_manager.file_manager import FileManager
 
 MIN_NATIVE_WEIGHT_SUPPORT = Version("0.10.0")
+MIN_NATIVE_OBJ_HEIGHT = None
 
+def regex_find_float(pattern: str, data: str) -> Optional[float]:
+    pattern = pattern.replace(r"(%F)", r"([0-9]*\.?[0-9]+)")
+    match = re.search(pattern, data)
+    val: Optional[float] = None
+    if match:
+        try:
+            val = float(match.group(1))
+        except Exception:
+            return None
+    return val
 
 def regex_find_floats(pattern: str, data: str) -> List[float]:
     pattern = pattern.replace(r"(%F)", r"([0-9]*\.?[0-9]+)")
@@ -112,10 +123,17 @@ class UboeMetadata:
         self.server: Server = config.get_server()
         moonraker_version = self.server.get_app_args()["software_version"]
         self.needs_weight_patch = False
+        self.needs_obj_height_patch = False
         try:
             self.needs_weight_patch = Version(
                 moonraker_version.split("-")[0]
             ) < MIN_NATIVE_WEIGHT_SUPPORT
+            if MIN_NATIVE_OBJ_HEIGHT is not None:
+                self.needs_obj_height_patch = Version(
+                    moonraker_version.split("-")[0]
+                ) < MIN_NATIVE_OBJ_HEIGHT
+            else :
+                self.needs_obj_height_patch = True
         except Exception:
             logging.info(
                 f"UboeMetadata: Unable to parse Moonraker version "
@@ -125,6 +143,12 @@ class UboeMetadata:
             logging.warning(
                 f"UboeMetadata: Detected older Moonraker version "
                 f"({moonraker_version}) without built-in filament weight "
+                "support, enriching metadata after extraction"
+            )
+        if self.needs_obj_height_patch:
+            logging.warning(
+                f"UboeMetadata: Detected older Moonraker version "
+                f"({moonraker_version}) with old BEFORE_LAYER_CHANGE built-in object height "
                 "support, enriching metadata after extraction"
             )
         self.server.register_event_handler(
@@ -152,16 +176,22 @@ class UboeMetadata:
         metadata = gc_metadata.get(fname)
         updated = dict(metadata)
         gc_path = self.file_manager.get_directory()
-        if self.needs_weight_patch:
+        # only read the header and footer if we need to patch object height or filament weight
+        if self.needs_obj_height_patch or self.needs_weight_patch:
             try:
                 with open(f"{gc_path}/{fname}", "rb") as f:
                     f.seek(0, 2)
                     size = f.tell()
                     f.seek(max(0, size - 1024 * 1024))
                     footer_data = f.read().decode(errors="ignore")
+                with open(f"{gc_path}/{fname}", "rb") as f:
+                    f.seek(0, 0)
+                    header_data = f.read(1024 * 1024).decode(errors="ignore")
             except OSError:
                 logging.exception(f"UboeMetadata: Unable to read {fname}")
                 return
+
+        if self.needs_weight_patch:
             if metadata is None or metadata.get("slicer") != "PrusaSlicer":
                 return
             if "filament_weights" in metadata and "filament_name" in metadata:
@@ -181,6 +211,11 @@ class UboeMetadata:
                     updated["filament_name"] = json.dumps(names)
                 elif names:
                     updated["filament_name"] = names[0]
+
+        if self.needs_obj_height_patch:
+            line= regex_find_float(r"; max_z_height: (%F)", header_data)
+            if not "object_height" in updated and line is not None:
+                updated["object_height"] = line
 
         async with self.cmd_lock:
             scmd: ShellCommandFactory = self.server.lookup_component("shell_command")
