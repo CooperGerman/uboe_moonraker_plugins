@@ -151,17 +151,17 @@ class UboeMetadata:
         gc_metadata = self.file_manager.get_metadata_storage()
         metadata = gc_metadata.get(fname)
         updated = dict(metadata)
-        try:
-            gc_path = self.file_manager.get_directory()
-            with open(f"{gc_path}/{fname}", "rb") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - 1024 * 1024))
-                footer_data = f.read().decode(errors="ignore")
-        except OSError:
-            logging.exception(f"UboeMetadata: Unable to read {fname}")
-            return
+        gc_path = self.file_manager.get_directory()
         if self.needs_weight_patch:
+            try:
+                with open(f"{gc_path}/{fname}", "rb") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 1024 * 1024))
+                    footer_data = f.read().decode(errors="ignore")
+            except OSError:
+                logging.exception(f"UboeMetadata: Unable to read {fname}")
+                return
             if metadata is None or metadata.get("slicer") != "PrusaSlicer":
                 return
             if "filament_weights" in metadata and "filament_name" in metadata:
