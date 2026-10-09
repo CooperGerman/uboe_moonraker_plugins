@@ -181,10 +181,9 @@ class AdditionalPrePrintChecks:
 				"pre_print_checks",
 				self.run_checks
 			)
-			logging.info("Additional Pre-Print Checks: Enabled")
 			self.enabled = True
 		else:
-			logging.info("Additional Pre-Print Checks: Disabled (spoolman not available)")
+			logging.warning("Additional Pre-Print Checks: Disabled (spoolman not available)")
 			self.enabled = False
 
 	async def component_init(self) -> None:
@@ -195,13 +194,15 @@ class AdditionalPrePrintChecks:
 			self.uboe_metadata = self.server.lookup_component("uboe_metadata")
 		except Exception as e:
 			raise self.config.error(f"[{self.config.get_name()}]: {e}")
-		logging.info("Additional Pre-Print Checks component initialized")
 
-	def _is_hh_enabled(self) -> bool:
+		self.mmu_server = self.server.lookup_component("mmu_server", None)
+
+	async def _is_hh_enabled(self) -> bool:
 		"""Check if MMU backend is present and enabled"""
 		if self.mmu_server is None:
 			self.is_hh = False
 			return False
+		await self.mmu_server._init_mmu_backend()
 		self.is_hh = self.mmu_server._mmu_backend_enabled()
 		return self.is_hh
 
@@ -213,6 +214,9 @@ class AdditionalPrePrintChecks:
 		Returns:
 			Spool ID if successful, None if no active spool or fetch failed
 		"""
+		if self.is_hh:
+			return self.mmu_server.mmu_backend_config["mmu"]["active_filament"]["spool_id"]
+
 		if not self.spoolman:
 			return None
 
@@ -701,7 +705,18 @@ class AdditionalPrePrintChecks:
 			return False
 
 		if tool_gate_map is not None:
-			self.multi_tool_mapping = tool_gate_map
+			if self.is_hh:
+				logging.warning("Tool gate map provided but HH mode is enabled, ignoring tool gate map")
+			else:
+				self.multi_tool_mapping = tool_gate_map
+
+		if self.is_hh:
+			self.multi_tool_mapping = []
+			ttg = self.mmu_server.mmu_backend_config["mmu"]["ttg_map"]
+			gate_spool_id = self.mmu_server.mmu_backend_config["mmu"]["gate_spool_id"]
+			for tool, tool_data in self.mmu_server.mmu_backend_config["mmu"]["slicer_tool_map"]["tools"].items():
+				logging.debug(f"Detected tool {tool} in slicer_tool_map: {tool_data}")
+				self.multi_tool_mapping.append(gate_spool_id[ttg[int(tool)]])
 
 		if not self.spoolman:
 			logging.warning("Spoolman component not available, skipping checks")
@@ -738,22 +753,25 @@ class AdditionalPrePrintChecks:
 		"""
 		try:
 			logging.info("Starting Additional Pre-Print Checks...")
-
 			logging.info(f"tool_gate_map: {tool_gate_map}")
-
-			pre_checks_ok = await self._prep_checks(tool_gate_map)
 			# Check if MMU mode
-			self._is_hh_enabled()
+			await self._is_hh_enabled()
+			detail = " "
+			if self.is_hh:
+				detail = " (HH mode enabled) "
+			pre_checks_ok = await self._prep_checks(tool_gate_map)
+			logging.info(f"multi_tool_mapping: {self.multi_tool_mapping}")
+
 			mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
-			logging.info(f"Running {mode} pre-print checks for file: {self.filename}")
+			logging.info(f"Running {mode} pre-print checks{detail}for file: {self.filename}")
 			await self._log_to_console(f"Running {mode} checks for: {self.filename}", "info")
 
 			# #######################################
 			# Run the checks
 			# #######################################
-			if self.is_hh:
-				await self._log_to_console("Pre-print checks skipped: Redundant with HH consistency checks", "warning")
-				return
+			# if self.is_hh:
+			# 	await self._log_to_console("Pre-print checks skipped: Redundant with HH consistency checks", "warning")
+			# 	return
 			try:
 				if pre_checks_ok:
 					# Single-spool mode: check active spool
