@@ -109,13 +109,12 @@ class ExtrusionPoints:
     def to_dict(self) -> list[dict]:
         return [point.to_dict() for point in self.points]
 
-    def has_point(self, extr_id: int, volume: float) -> list[ExtrusionSamplePoint]:
-        """Get all points starting from the given extr_id and volume."""
+    def has_point(self, extr_id: int, volume: float) -> bool:
+        """Check if a point with the given extr_id and volume exists."""
         for i, point in enumerate(self.points):
             if int(point.extr_id) == int(extr_id) and float(point.extruded_volume_mm3) == float(volume):
                 return True
-        logging.warning(f"No points found starting from extruder ID {extr_id} and volume {volume}.")
-        logging.warning(f"Searched points: {[p.to_dict() for p in self.points]}")
+        logging.info(f"No points found starting from extruder ID {extr_id} and volume being exactly {volume}.")
         return False
 
 class UboeMetadata:
