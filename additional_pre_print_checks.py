@@ -251,22 +251,36 @@ class AdditionalPrePrintChecks:
 
 	async def _fetch_spool_info(self, spool_id: int) -> Optional[Dict[str, Any]]:
 		"""Retrieve spool information from Spoolman (same method as mmu_server)"""
-		try:
-			response = await self.spoolman.http_client.request(
-				method="GET",
-				url=f'{self.spoolman.spoolman_url}/v1/spool/{spool_id}',
-				body=None
-			)
-			if response.status_code == 404:
-				logging.error(f"Spool {spool_id} not found in Spoolman")
-				return None
-			elif response.has_error():
-				logging.error(f"Error fetching spool {spool_id}: HTTP {response.status_code}")
-				return None
-			return response.json()
-		except Exception as e:
-			logging.error(f"Failed to fetch spool {spool_id}: {e}")
-			return None
+		for attempt in range(3):
+			try:
+				response = await asyncio.wait_for(
+					self.spoolman.http_client.request(
+						method="GET",
+						url=f'{self.spoolman.spoolman_url}/v1/spool/{spool_id}',
+						body=None
+					),
+					timeout=5
+				)
+				if response.status_code == 404:
+					logging.error(f"Spool {spool_id} not found in Spoolman")
+					return None
+				if response.has_error():
+					error_message = f"HTTP {response.status_code}"
+				else:
+					return response.json()
+			except Exception as e:
+				error_message = str(e)
+
+			if attempt < 2:
+				logging.warning(
+					f"Failed to fetch spool {spool_id} (attempt {attempt + 1}/3): "
+					f"{error_message}. Retrying."
+				)
+			else:
+				logging.error(
+					f"Failed to fetch spool {spool_id} after 3 attempts: {error_message}"
+				)
+		return None
 
 	async def _get_current_filename(self) -> Optional[str]:
 		"""
