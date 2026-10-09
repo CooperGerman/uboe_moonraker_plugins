@@ -223,49 +223,35 @@ class UboeMetadata:
         gc_metadata.insert(fname, updated)
 
 def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
-    logging.info(f"Extracting extrusion sample points from the end of {gc_path}.")
+    logging.info(f"Extracting extrusion sample points from the executable-block footer of {gc_path}.")
     sample_points_re = re.compile(
         r"^[ \t]*;[ \t]*UBOE_EXTRUSION_SAMPLE_POINTS:[ \t]*(\[[^\r\n]*\])[ \t]*$"
     )
-    extrusion_sample_points = ExtrusionPoints()
 
     try:
-        with open(gc_path, "rb") as gcode_file:
-            gcode_file.seek(0, 2)
-            file_size = gcode_file.tell()
-            gcode_file.seek(max(0, file_size - 1))
-            has_trailing_newline = gcode_file.read(1) == b"\n"
+        with open(gc_path, "r", errors="replace") as gcode_file:
+            executable_block_end_found = False
+            marker_match = None
+            for line in gcode_file:
+                if not executable_block_end_found:
+                    if line.strip() == "; EXECUTABLE_BLOCK_END":
+                        executable_block_end_found = True
+                    continue
 
-            chunks = []
-            position = file_size
-            newline_count = 0
-            required_newlines = 100 + has_trailing_newline
-            while position > 0 and newline_count < required_newlines:
-                chunk_start = max(0, position - 64 * 1024)
-                gcode_file.seek(chunk_start)
-                chunk = gcode_file.read(position - chunk_start)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
-                position = chunk_start
-
-            footer = b"".join(reversed(chunks))
-            if newline_count >= required_newlines:
-                cutoff = len(footer)
-                for _ in range(required_newlines):
-                    cutoff = footer.rfind(b"\n", 0, cutoff)
-                footer = footer[cutoff + 1:]
-            footer = footer.decode("utf-8", errors="replace")
+                match = sample_points_re.search(line)
+                if match:
+                    marker_match = match
     except OSError:
         raise OSError(f"Unable to read GCode file: {gc_path}")
 
-    marker_match = None
-    for line in reversed(footer.splitlines()):
-        marker_match = sample_points_re.search(line)
-        if marker_match:
-            break
+    if not executable_block_end_found:
+        raise ValueError(f"No ; EXECUTABLE_BLOCK_END marker found in {gc_path}")
 
     if marker_match is None:
-        raise ValueError(f"No UBOE_EXTRUSION_SAMPLE_POINTS footer found in the last 100 lines of {gc_path}")
+        raise ValueError(
+            f"No UBOE_EXTRUSION_SAMPLE_POINTS footer found after "
+            f"; EXECUTABLE_BLOCK_END in {gc_path}"
+        )
 
     try:
         point_data = json.loads(marker_match.group(1))
