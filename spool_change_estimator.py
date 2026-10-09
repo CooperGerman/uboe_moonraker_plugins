@@ -75,7 +75,7 @@ class SpoolChangeEstimator:
 		state = result.get("print_stats", {}).get("state")
 		if state is not None:
 			logging.debug(f"Initializing klipper ready with current state being {state}")
-			self._on_job_state_changed(state)
+			await self._on_job_state_changed(state)
 		else :
 			logging.error("Unable to determine current print state during klippy ready initialization")
 			raise self.server.error("Unable to determine current print state during klippy ready initialization")
@@ -196,9 +196,8 @@ class SpoolChangeEstimator:
 		if not self.additional_pre_print_checks.extracted_metadata.extrusion_sample_points:
 			await self._log_to_console("No extrusion sample points found in extracted metadata. Cannot estimate spool change.", "error")
 			return
-		point = self.additional_pre_print_checks.extracted_metadata.extrusion_sample_points.has_point(extr_id, volume)
-		if not point:
-			await self._log_to_console(f"No sample points found starting from extruder ID {extr_id} and volume {volume}, using closest. UBOE_SPOOL_CHANGE_ESTIMATE command and parsed extrusion points should match. (See moonraker.log for list of searched points)", "warning")
+
+		self.additional_pre_print_checks.extracted_metadata.extrusion_sample_points.has_point(extr_id, volume)
 
 		runouts = self.additional_pre_print_checks.estimate_runouts(current_remaining_g=current_remaining_g, density=density, spool_size_g=spool_size_g, start_volume=volume, extr_id=extr_id)
 		if not runouts:
