@@ -75,17 +75,30 @@ class ExtractedMetadata:
 		self.filament_weights = self._parse_filament_weights()
 		self.filament_names = self._parse_filament_names()
 		self.referenced_tools = self._parse_referenced_tools()
-		self.extrusion_sample_points = self._parse_extrusion_sample_points()
+		self.extrusion_sample_points = self._parse_extrusion_sample_points(report_error=False)
+		self.processed_by_uboe = self.raw_metadata.get('processed_by_uboe', False)
 		# logging.info(f"Extrusion sample points: {self.extrusion_sample_points.to_dict()}")
 
-	def _parse_extrusion_sample_points(self) -> Optional[ExtrusionPoints]:
+	def _parse_extrusion_sample_points(self, report_error: bool = True) -> Optional[ExtrusionPoints]:
 		points = self.raw_metadata.get('extrusion_sample_points')
 		if points is None:
-			self.error_body.append("No extrusion sample points in file metadata, skipping spool change estimation")
+			if report_error:
+				self.error_body.append("No extrusion sample points in file metadata, skipping spool change estimation")
 			return None
 		if not isinstance(points, list):
 			points = [points]
 		return ExtrusionPoints(dict_init=points)
+
+	def refresh_from_storage(self, raw_metadata: MetadataStorage, filename: str) -> None:
+		"""Refresh processing fields after asynchronous metadata enrichment."""
+		metadata = raw_metadata.get(filename)
+		if metadata is None:
+			self.processed_by_uboe = False
+			self.extrusion_sample_points = None
+			return
+		self.raw_metadata = metadata
+		self.extrusion_sample_points = self._parse_extrusion_sample_points(report_error=False)
+		self.processed_by_uboe = metadata.get('processed_by_uboe', False)
 
 	def _parse_filament_weights(self) -> Optional[List[float]]:
 		weights = self.raw_metadata.get('filament_weights')
@@ -163,6 +176,15 @@ class AdditionalPrePrintChecks:
 
 		self.multi_tool_mapping =  False
 		self.filename = None
+		self._uboe_metadata_updates: Dict[str, Dict[str, Any]] = {}
+		self.server.register_event_handler(
+			"uboe_metadata:update_started",
+			self._handle_uboe_metadata_update_started,
+		)
+		self.server.register_event_handler(
+			"uboe_metadata:update_finished",
+			self._handle_uboe_metadata_update_finished,
+		)
 
 		# Mismatch severity levels: 'error', 'warning', 'info'
 		self.material_mismatch_severity = self.config.get("material_mismatch_severity", "warning")
@@ -708,6 +730,67 @@ class AdditionalPrePrintChecks:
 
 		return check_passed
 
+	async def _handle_uboe_metadata_update_started(self, filename: str) -> None:
+		self._uboe_metadata_updates[filename] = {
+			"event": asyncio.Event(),
+			"success": False,
+		}
+
+	async def _handle_uboe_metadata_update_finished(
+		self,
+		filename: str,
+		success: bool,
+	) -> None:
+		update = self._uboe_metadata_updates.setdefault(
+			filename,
+			{"event": asyncio.Event(), "success": False},
+		)
+		update["success"] = success
+		update["event"].set()
+
+	def _has_valid_extrusion_sample_points(self) -> bool:
+		return (
+			self.extracted_metadata.processed_by_uboe is True
+			and self.extracted_metadata.extrusion_sample_points is not None
+			and len(self.extracted_metadata.extrusion_sample_points) >= 2
+		)
+
+	async def _wait_for_processed_by_uboe(self) -> tuple[bool, float]:
+		# Wait for the current metadata entry to contain valid enrichment.
+		timeout = 30
+		start_time = asyncio.get_event_loop().time()
+		self.extracted_metadata.refresh_from_storage(
+			self.metadata_storage,
+			self.filename,
+		)
+		if self._has_valid_extrusion_sample_points():
+			return True, asyncio.get_event_loop().time() - start_time
+
+		update = self._uboe_metadata_updates.setdefault(
+			self.filename,
+			{"event": asyncio.Event(), "success": False},
+		)
+		remaining = timeout - (asyncio.get_event_loop().time() - start_time)
+		try:
+			await asyncio.wait_for(update["event"].wait(), max(0, remaining))
+		except asyncio.TimeoutError:
+			self.error_body.append(
+				f"[{self.config.get_name()}]: Timeout ({timeout} seconds) "
+				"waiting for uboe metadata processing."
+			)
+			return False, asyncio.get_event_loop().time() - start_time
+
+		self.extracted_metadata.refresh_from_storage(
+			self.metadata_storage,
+			self.filename,
+		)
+		if not update["success"] or not self._has_valid_extrusion_sample_points():
+			self.error_body.append(
+				"uboe_metadata processing completed without valid extrusion sample points."
+			)
+			return False, asyncio.get_event_loop().time() - start_time
+		return True, asyncio.get_event_loop().time() - start_time
+
 	async def _prep_checks(self, tool_gate_map=None) -> None:
 		'''
 		Prepare the environment for running pre-print checks.
@@ -749,6 +832,13 @@ class AdditionalPrePrintChecks:
 
 		_nb_errors = len(self.error_body)
 		self.extracted_metadata = ExtractedMetadata(self.metadata_storage, self.filename, self.error_body)
+		# wait for valid uboe metadata enrichment
+		processed, elapsed_time = await self._wait_for_processed_by_uboe()
+		if not processed:
+			return False
+		else :
+			logging.info(f"uboe_metadata has valid extrusion sample points. (Found in {elapsed_time:.2f} seconds)")
+
 		if len(self.error_body) > _nb_errors:
 			logging.error(f"Errors found during preparation checks: {self.error_body[_nb_errors:]}")
 			return False
