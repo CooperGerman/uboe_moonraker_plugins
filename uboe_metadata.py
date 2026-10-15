@@ -171,8 +171,13 @@ class UboeMetadata:
         The additional_pre_print_checks plugin will use this to check if the
         spool changes happen during presence times and other stuff.
         '''
+        await self.server.send_event("uboe_metadata:update_started", fname)
         gc_metadata = self.file_manager.get_metadata_storage()
         metadata = gc_metadata.get(fname)
+        if metadata is None:
+            logging.error(f"UboeMetadata: No metadata found for {fname}")
+            await self.server.send_event("uboe_metadata:update_finished", fname, False)
+            return
         updated = dict(metadata)
         gc_path = self.file_manager.get_directory()
         # only read the header and footer if we need to patch object height or filament weight
@@ -188,12 +193,15 @@ class UboeMetadata:
                     header_data = f.read(1024 * 1024).decode(errors="ignore")
             except OSError:
                 logging.exception(f"UboeMetadata: Unable to read {fname}")
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
                 return
 
         if self.needs_weight_patch:
             if metadata is None or metadata.get("slicer") != "PrusaSlicer":
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
                 return
             if "filament_weights" in metadata and "filament_name" in metadata:
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
                 return
             if "filament_weights" not in updated:
                 line = regex_find_string(
@@ -216,21 +224,30 @@ class UboeMetadata:
             if not "object_height" in updated and line is not None:
                 updated["object_height"] = line
 
+        # Invalidate enrichment from an earlier processing attempt while this
+        # file is being processed again.
+        updated.pop("extrusion_sample_points", None)
+        updated.pop("processed_by_uboe", None)
+
         async with self.cmd_lock:
             scmd: ShellCommandFactory = self.server.lookup_component("shell_command")
             sc_est_cmd = self._gen_spoolchange_est_cmd(f"{gc_path}/{fname}")
             # catch the errors that could have occured running the command
             try:
                 ret = await scmd.exec_cmd(sc_est_cmd, 60., log_stderr=True)
-            except Exception as e:
+            except Exception:
                 logging.error(f"UboeMetadata: Error executing uboe_metadata for {fname}")
+                gc_metadata.insert(fname, updated)
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
                 return
             # if the script exited with an exception, ret might not contain valid JSON
             # and json.loads(ret) could raise an error
             try:
                 extrusion_sample_points = ExtrusionPoints(dict_init=json.loads(ret))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
                 logging.error(f"UboeMetadata: Failed to decode JSON from spool change estimate command output for {fname}: {ret}")
+                gc_metadata.insert(fname, updated)
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
                 return
             # Keep points with strictly increasing cumulative weight for interpolation.
             non_monotonic_points: list[ExtrusionSamplePoint] = []
@@ -251,10 +268,15 @@ class UboeMetadata:
                     "~/.local/bin/orca-post-proc-script and appends the "
                     "UBOE_EXTRUSION_SAMPLE_POINTS footer."
                 )
+                gc_metadata.insert(fname, updated)
+                await self.server.send_event("uboe_metadata:update_finished", fname, False)
+                return
 
         updated["extrusion_sample_points"] = extrusion_sample_points.to_dict()
+        updated["processed_by_uboe"] = True
         logging.info(f"UboeMetadata: Updated metadata with extrusion sample points for {fname}.")
         gc_metadata.insert(fname, updated)
+        await self.server.send_event("uboe_metadata:update_finished", fname, True)
 
 def extract_extrusion_sample_points(gc_path: str) -> ExtrusionPoints:
     logging.info(f"Extracting extrusion sample points from the executable-block footer of {gc_path}.")
