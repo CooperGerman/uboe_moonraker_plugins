@@ -898,19 +898,20 @@ class AdditionalPrePrintChecks:
 					all_ok = False
 
 				if all_ok:
-					await self._log_to_console("✓ All pre-print checks PASSED", "success", reason='')
+					msg = []
+					msg.append("✓ All pre-print checks PASSED")
 					if self.enable_filament_name_check:
-						await self._log_to_console("   ✓ filament name compliance check passed", "success", reason='')
+						msg.append("   ✓ filament name compliance check passed")
 					if self.enable_material_check:
-						await self._log_to_console("   ✓ material compliance check passed", "success", reason='')
+						msg.append("   ✓ material compliance check passed")
 					if self.enable_weight_check:
-						await self._log_to_console("   ✓ sufficient filament available", "success", reason='')
+						msg.append("   ✓ sufficient filament available")
 					if self.enable_spool_change_on_work_hours_check:
 						if self.spool_runouts:
-							mess = f"   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})"
+							msg.append("   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})")
 						else :
-							mess = f"   ✓ No spool runouts detected"
-						await self._log_to_console(mess, "success", reason='')
+							msg.append("   ✓ No spool runouts detected")
+					await self._log_to_console(msg=(".\n".join(msg)), reason="Pre-Print Check Passed", severity="success")
 
 				else:
 					# Pause the print
