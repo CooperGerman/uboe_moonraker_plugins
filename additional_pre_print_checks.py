@@ -337,8 +337,8 @@ class AdditionalPrePrintChecks:
 		if severity == 'debug': color = "#38bdf8"
 		if severity == 'debug': opacity = 0.7
 
-		msg = msg.replace("_N_","\n")
-
+		msg = msg.split("\n")
+		msg = "<br>".join(msg)
 		if (severity == 'error' or severity == 'alert'):
 			logging.error(reason + ": " + msg)
 		if (severity == 'warning'):
