@@ -358,16 +358,11 @@ class AdditionalPrePrintChecks:
 			_msg = ''
 
 		try:
-			if self.is_hh:
-				error_flag = "ERROR=1" if severity == "error" else ""
-				msg = msg.replace("\n", "\\n") # Get through klipper filtering
-				await self.klippy_apis.run_gcode(f"MMU_LOG MSG='{msg}' {error_flag}")
-			else:
-				msg = msg.replace("\n", "\\n")
-				if popup :
-					await self.klippy_apis.run_gcode('_UBOE_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
-				else :
-					await self.klippy_apis.run_gcode(f"M118 <div>{_title}{_msg}</div>")
+			msg = msg.replace("\n", "\\n")
+			if popup :
+				await self.klippy_apis.run_gcode('_UBOE_DIALOG MSG="%s" REASON="%s"' % (msg, reason))
+			else :
+				await self.klippy_apis.run_gcode(f"M118 <div>{_title}{_msg}</div>")
 		except Exception as e:
 			logging.error(f"Failed to send message to console: {e}")
 
