@@ -903,7 +903,7 @@ class AdditionalPrePrintChecks:
 						msg.append("   ✓ sufficient filament available")
 					if self.enable_spool_change_on_work_hours_check:
 						if self.spool_runouts:
-							msg.append("   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})")
+							msg.append(f"   ✓ spool change(s) within work hours ({self.work_hours_start} - {self.work_hours_end})")
 						else :
 							msg.append("   ✓ No spool runouts detected")
 					await self._log_to_console(msg=(".\n".join(msg)), reason="Pre-Print Check Passed", severity="success")
