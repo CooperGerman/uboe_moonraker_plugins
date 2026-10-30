@@ -425,8 +425,10 @@ class AdditionalPrePrintChecks:
 		if severity == 'debug': color = "#38bdf8"
 		if severity == 'debug': opacity = 0.7
 
-		msg = msg.split("\n")
-		msg = "<br>".join(msg)
+		if not popup:
+			msg = msg.split("\n")
+			msg = "<br>".join(msg)
+
 		if (severity == 'error' or severity == 'alert'):
 			logging.error(reason + ": " + msg)
 		if (severity == 'warning'):
@@ -574,14 +576,8 @@ class AdditionalPrePrintChecks:
 		Returns:
 			True if check passed or not applicable, False if failed
 		"""
-		if not self.spoolman or not self.enable_weight_check:
+		if not self.enable_weight_check:
 			return True
-
-		# Get active spool and initialize data
-		spool_id = await self._init_spool()
-		if spool_id is None:
-			self.error_body.append("No active spool set or cannot fetch spool info")
-			return False
 
 		if self.extracted_metadata.filament_weights is None:
 			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
@@ -783,6 +779,87 @@ class AdditionalPrePrintChecks:
 
 		return check_passed
 
+	async def check_spoolman_setup(self, virtual_tool_map : VirtualToolMap, filename: str) -> bool:
+		'''Check if the spoolman setup is correct for the given file. Returns True if setup is valid, False otherwise.'''
+		# If only one referenced tool, spoolman setup should have 1 active spool assigned to the current {printer : <hostname>, gate: <gate_number>}
+		# Get active spool and initialize data
+		if self.extracted_metadata.referenced_tools is None:
+			self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
+			return False
+		elif len(self.extracted_metadata.referenced_tools) == 0:
+			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
+			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
+		elif len(self.extracted_metadata.referenced_tools) > 1:
+			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+			return False
+		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
+
+		check_passed = True
+
+		for tool_index in tool_range:
+			current_spool_id = virtual_tool_map.get_spoolid_for_tool(tool_index)
+			if current_spool_id == -1 or current_spool_id is None:
+				self.error_body.append(f"No active spool for tool index {tool_index} (referenced by current file)")
+				return False
+			spool_info = virtual_tool_map.get_spool_info_for_tool(tool_index)
+			# check if spool id archived
+			if spool_info.get('archived', False):
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} is archived, this should occur, but may indicate potential issues")
+				await self._log_to_console(f"Spool {current_spool_id} is archived, watch out for potential issues", self.spoolman_bad_severity)
+
+			# Get spool extra field
+			extra = spool_info.get('extra', {})
+			spool_printer_name = extra.get(MMU_NAME_FIELD, None)
+			spool_mmu_gate = extra.get(MMU_GATE_FIELD, None)
+
+			# First check if fields are present
+			if not extra:
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} has no extra field")
+					return False
+				await self._log_to_console(f"Spool {current_spool_id} has no extra field, skipping check", self.spoolman_bad_severity)
+			if spool_printer_name is None:
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} has no {MMU_NAME_FIELD} field")
+					return False
+				await self._log_to_console(f"Spool {current_spool_id} has no {MMU_NAME_FIELD} field", self.spoolman_bad_severity)
+			if spool_mmu_gate is None:
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} has no {MMU_GATE_FIELD} field")
+					return False
+				await self._log_to_console(f"Spool {current_spool_id} has no {MMU_GATE_FIELD} field", self.spoolman_bad_severity)
+
+			# Then check for field values coherency
+			if spool_printer_name is None or spool_mmu_gate is None:
+				return False
+
+			spool_printer_name = spool_printer_name.strip('"').strip("'") if type(spool_printer_name) == str else spool_printer_name
+
+			if not spool_printer_name:
+				check_passed = False
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} is assigned to no printer.")
+				await self._log_to_console(f"Spool {current_spool_id} is assigned to no printer.", self.spoolman_bad_severity)
+			elif spool_printer_name != self.printer_hostname:
+				check_passed = False
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} is assigned to printer `{spool_printer_name}` but the actual printer hostname is `{self.printer_hostname}`")
+				await self._log_to_console(f"Spool {current_spool_id} is assigned to printer `{spool_printer_name}` but the actual printer hostname is `{self.printer_hostname}`", self.spoolman_bad_severity)
+
+			expected_gate = virtual_tool_map.get_gate_for_tool(tool_index)
+			if int(spool_mmu_gate) != expected_gate:
+				check_passed = False
+				if self.spoolman_bad_severity == 'error':
+					self.error_body.append(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for tool index is `{tool_index}` is `{expected_gate}`")
+				await self._log_to_console(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for tool index is `{tool_index}` is `{expected_gate}`", self.spoolman_bad_severity)
+
+			if check_passed:
+				msg = f"Spoolman setup check Check PASSED: Spool {current_spool_id} name and gate match"
+				logging.info(msg)
+
+		return check_passed
+
 	async def _handle_uboe_metadata_update_started(self, filename: str) -> None:
 		self._uboe_metadata_updates[filename] = {
 			"event": asyncio.Event(),
@@ -930,13 +1007,21 @@ class AdditionalPrePrintChecks:
 					else:
 						filament_name_ok = True
 
-					all_ok = weight_ok and filament_name_ok and spool_change_ok
+					# check spoolman setup
+					if self.enable_spoolman_setup_check:
+						spoolman_ok = await self.check_spoolman_setup(virtual_tool_map, self.filename)
+					else:
+						spoolman_ok = True
+
+					all_ok = weight_ok and filament_name_ok and spool_change_ok and spoolman_ok
 				else :
 					all_ok = False
 
 				if all_ok:
 					msg = []
 					msg.append("✓ All pre-print checks PASSED")
+					if self.enable_spoolman_setup_check:
+						msg.append("   ✓ spoolman setup check passed")
 					if self.enable_filament_name_check:
 						msg.append("   ✓ filament name compliance check passed")
 					if self.enable_material_check:
