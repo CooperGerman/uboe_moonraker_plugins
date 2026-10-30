@@ -19,7 +19,7 @@
 
 set -e
 
-cd /home/uboe/uboe_moonraker_plugins
+cd "${HOME}/uboe_moonraker_plugins"
 git pull --rebase --autostash
 ./install.sh
 
