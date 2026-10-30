@@ -130,7 +130,7 @@ class UboeHasUpdates:
 					updated.append(repo)
 				except self.shell_command.error as e:
 					logging.error("Unable to update repository %s: %s", repo, e)
-					failed.append(repo)
+					failed.append(f"{os.path.basename(repo)}: {self._error_reason(e)}")
 			self.outdated_repos = [r for r in self.outdated_repos if r not in updated]
 			if failed:
 				await self._build_custom_popup(
@@ -141,6 +141,18 @@ class UboeHasUpdates:
 				return
 			if updated:
 				await self._restart_services()
+
+	@staticmethod
+	def _error_reason(e: Exception) -> str:
+		"""Single-line, popup-safe reason: error message plus last stderr line."""
+		reason = str(e)
+		stderr = getattr(e, "stderr", b"") or b""
+		if isinstance(stderr, bytes):
+			stderr = stderr.decode(errors="replace")
+		lines = [l.strip() for l in stderr.strip().splitlines() if l.strip()]
+		if lines and lines[-1] not in reason:
+			reason += f" - {lines[-1]}"
+		return reason.replace('"', "'").replace("\n", " ")[:300]
 
 	async def update_repo(self, repo: str) -> None:
 		update_script = os.path.join(repo, "update.sh")
