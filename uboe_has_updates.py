@@ -143,6 +143,13 @@ class UboeHasUpdates:
 				await self._restart_services()
 
 	async def update_repo(self, repo: str) -> None:
+		update_script = os.path.join(repo, "update.sh")
+		if os.path.isfile(update_script):
+			await self.shell_command.exec_cmd(
+				f"bash {shlex.quote(update_script)}",
+				timeout=600., attempts=1, log_stderr=True, cwd=repo
+			)
+			return
 		git_command = f"git -C {shlex.quote(repo)}"
 		dirty = await self.shell_command.exec_cmd(
 			f"{git_command} status --porcelain --untracked-files=no",
