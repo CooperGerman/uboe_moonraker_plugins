@@ -25,8 +25,90 @@ if TYPE_CHECKING:
 	from ..components.file_manager.metadata import MetadataStorage
 	from ..components.database import MoonrakerDatabase
 
+MMU_NAME_FIELD   = 'printer_name'
+MMU_GATE_FIELD   = 'mmu_gate_map'
 DB_NAMESPACE = "moonraker"
 ACTIVE_SPOOL_KEY = "spoolman.spool_id"
+
+class VirtualToolMap():
+	'''
+	Class to represent a virtual tool mapping in order to wrap under
+	one representation mutiple scanrios such as :
+	- Single-spool setups (static active spool)
+	- Multi-material setups with MMU using Happy Hare
+	- Tool-specific spool assignments (given by the klipper macros)
+	This class builds upon request a tool to "gate" mapping, allowing
+	checks to use a unified checking method, iterate over all tools,
+	and check their associated spoools.
+	'''
+	def __init__(self, checks : AdditionalPrePrintChecks, tool_to_spoolid: List[int]|None = None):
+		self.checks = checks
+		self.tool_to_spoolid = tool_to_spoolid
+		# remove all '-1' values from the tool to spool ID mapping
+		# self.tool_to_spoolid = [v for v in self.tool_to_spoolid if v != -1] if self.tool_to_spoolid is not None else None
+		self.tool_to_spoolid_mapping = []
+		# tool to gate map naively is the tool index itself but in
+  		# the case of HH overwrite it with those
+		self.tool_to_gate_mapping = []
+		self.multi = None
+
+	async def build(self):
+
+		# Spool_ids given at remote method call in a list coresponding to the tool numbers
+		if self.tool_to_spoolid is not None:
+			if self.checks.is_hh:
+				logging.warning("Tool gate map provided but HH mode is enabled, ignoring tool gate map")
+			else:
+				self.tool_to_spoolid_mapping = self.tool_to_spoolid
+				self.tool_to_gate_mapping = list(range(len(self.tool_to_spoolid)))
+		else :
+			# No given spool mapping, fallback to default gate mapping if available
+			spool_id = await self.checks._init_spool()
+			if spool_id is None:
+				self.checks.error_body.append("No active spool set or cannot fetch spool info")
+				return False
+			else :
+				self.tool_to_spoolid_mapping.append(spool_id)
+				self.tool_to_gate_mapping.append(0)
+
+		# Spool_ids given by the HH slicer tool mapping
+		if self.checks.is_hh:
+			self.tool_to_spoolid_mapping = []
+			self.tool_to_gate_mapping = []
+			ttg = self.checks.mmu_server.mmu_backend_config["mmu"]["ttg_map"]
+			gate_spool_id = self.checks.mmu_server.mmu_backend_config["mmu"]["gate_spool_id"]
+			for tool, tool_data in self.checks.mmu_server.mmu_backend_config["mmu"]["slicer_tool_map"]["tools"].items():
+				logging.debug(f"Detected tool {tool} in slicer_tool_map: {tool_data}")
+				self.tool_to_spoolid_mapping.append(gate_spool_id[ttg[int(tool)]])
+				self.tool_to_gate_mapping.append(ttg[int(tool)])
+
+		logging.info(f"tool_to_spoolid_mapping: {self.tool_to_spoolid_mapping}")
+
+
+		if not self.checks.is_hh:
+			for i in range(len(self.tool_to_spoolid_mapping)):
+				self.tool_to_gate_mapping.append(i)
+
+		self.multi = len(self.tool_to_spoolid_mapping) > 1
+
+	async def fetch_tool_mapping_spool_info(self):
+		'''
+		Fetches the spool information for the current tool mapping.
+  		'''
+		self.tool_spoolid_info = []
+		for spool_id in self.tool_to_spoolid_mapping:
+			spool_info = await self.checks._fetch_spool_info(spool_id)
+			self.tool_spoolid_info.append(spool_info)
+
+	def get_spoolid_for_tool(self, tool_number: int) -> Optional[str]:
+			return self.tool_to_spoolid_mapping[tool_number] if tool_number < len(self.tool_to_spoolid_mapping) else None
+
+	def get_spool_info_for_tool(self, tool_number: int) -> Optional[Dict[str, Any]]:
+		return self.tool_spoolid_info[tool_number] if tool_number < len(self.tool_spoolid_info) else None
+
+	def get_gate_for_tool(self, tool_number: int) -> Optional[int]:
+		return self.tool_to_gate_mapping[tool_number] if tool_number < len(self.tool_to_gate_mapping) else None
+
 
 class RunoutEstimate:
 	def __init__(
@@ -143,6 +225,8 @@ class AdditionalPrePrintChecks:
 	def __init__(self, config: ConfigHelper):
 		self.config = config
 		self.server = config.get_server()
+		self.printer_info = self.server.get_host_info()
+		self.printer_hostname = None
 		self.spoolman: Optional[SpoolManager] = None
 		self.mmu_server: Optional[MmuServer] = None
 		self.error_body = []
@@ -166,6 +250,10 @@ class AdditionalPrePrintChecks:
 
 		self.enable_spool_change_on_work_hours_check = self.config.getboolean("enable_spool_change_on_work_hours_check", True)
 		self.spool_change_outside_work_hours_severity = self.config.get("spool_change_outside_work_hours_severity", "error")
+
+		self.enable_spoolman_setup_check = self.config.getboolean("enable_spoolman_setup_check", True)
+		self.spoolman_bad_severity = self.config.get("spoolman_setup_severity", "error")
+
 		if self.enable_spool_change_on_work_hours_check:
 			self.work_hours_start = self.config.get("work_hours_start")
 			self.work_hours_end = self.config.get("work_hours_end")
@@ -174,7 +262,6 @@ class AdditionalPrePrintChecks:
 			self.work_hours_end = time.fromisoformat(self.work_hours_end.zfill(5))
 			self.spool_runouts: Optional[List[RunoutEstimate]] = None
 
-		self.multi_tool_mapping =  False
 		self.filename = None
 		self._uboe_metadata_updates: Dict[str, Dict[str, Any]] = {}
 		self.server.register_event_handler(
@@ -210,6 +297,7 @@ class AdditionalPrePrintChecks:
 
 	async def component_init(self) -> None:
 		"""Initialize component"""
+		self.printer_hostname = self.printer_info["hostname"]
 		if self.spoolman:
 			await self._init_spool()
 		try:
@@ -224,7 +312,7 @@ class AdditionalPrePrintChecks:
 		if self.mmu_server is None:
 			self.is_hh = False
 			return False
-		await self.mmu_server._init_mmu_backend()
+		await self.mmu_server._initialize_mmu()
 		self.is_hh = self.mmu_server._mmu_backend_enabled()
 		return self.is_hh
 
@@ -476,7 +564,7 @@ class AdditionalPrePrintChecks:
 			logging.error(f"Failed to parse timestamp '{timestamp}': {e}")
 			return incriminated
 
-	async def check_print_weight(self, filename: str) -> bool:
+	async def check_print_weight(self, virtual_tool_map: VirtualToolMap, filename: str) -> bool:
 		"""
 		Check if active spool has sufficient weight for the print job
 
@@ -499,34 +587,31 @@ class AdditionalPrePrintChecks:
 			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
 			return False
 
-		if self.multi_tool_mapping:
-			tool_range = range(len(self.multi_tool_mapping))
-		else:
-			if self.extracted_metadata.referenced_tools is None:
-				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
-				return False
-			elif len(self.extracted_metadata.referenced_tools) == 0:
-				self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
-				self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
-			elif len(self.extracted_metadata.referenced_tools) > 1:
-				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
-				return False
-			tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
+		if self.extracted_metadata.referenced_tools is None:
+			self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
+			return False
+		elif len(self.extracted_metadata.referenced_tools) == 0:
+			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
+			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
+		elif len(self.extracted_metadata.referenced_tools) > 1:
+			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+			return False
+		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
 		# Check each tool/spool
 		weight_ok = True
 		for tool_index in tool_range:
-			if self.multi_tool_mapping:
-				current_spool_id =  self.multi_tool_mapping[tool_index]
-				self.cached_spool_info = await self._fetch_spool_info(current_spool_id)
-				if self.cached_spool_info is None:
-					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {current_spool_id})")
-					return False
-			else:
-				current_spool_id = spool_id
+			logging.info(f"Checking weight for tool index {tool_index}")
+			current_spool_id = virtual_tool_map.get_spoolid_for_tool(tool_index)
+			if current_spool_id == -1 or current_spool_id is None:
+				self.error_body.append(f"No active spool for tool index {tool_index} (referenced by current file)")
+				return False
+			logging.info(f"Current spool ID for tool index {tool_index}: {current_spool_id}")
+			spool_info = virtual_tool_map.get_spool_info_for_tool(tool_index)
+			logging.info(f"Spool info for tool index {tool_index}: {spool_info}")
 
 			# Get remaining weight from cached spool info
-			remaining_weight = self.cached_spool_info.get('remaining_weight')
+			remaining_weight = spool_info.get('remaining_weight')
 			if remaining_weight is None:
 				self.error_body.append("Spool has no remaining weight data, skipping check")
 				return False
@@ -536,7 +621,7 @@ class AdditionalPrePrintChecks:
 			required_with_margin = required_weight + self.weight_margin
 			sufficient = remaining_weight >= required_with_margin
 
-			filament = self.cached_spool_info.get('filament', {})
+			filament = spool_info.get('filament', {})
 			filament_name = filament.get('name', 'Unknown')
 
 			if sufficient:
@@ -553,9 +638,9 @@ class AdditionalPrePrintChecks:
 				weight_ok = False
 		return weight_ok
 
-	async def check_filament_name_compliance(self, filename: str) -> bool:
+	async def check_filament_name_compliance(self, virtual_tool_map : VirtualToolMap, filename: str) -> bool:
 		"""
-		Check if active spool filament name matches metadata filament name
+		Check if referenced tool's spool filament name matches metadata filament name
 
 		Args:
 			filename: Path to gcode file
@@ -563,47 +648,31 @@ class AdditionalPrePrintChecks:
 		Returns:
 			True if compliant or check not applicable, False if error severity and mismatch
 		"""
-		if not self.spoolman or not self.enable_filament_name_check:
+		if not self.enable_filament_name_check:
 			return True
 
-		# Get active spool and initialize data
-		spool_id = await self._init_spool()
-		if spool_id is None and not self.multi_tool_mapping:
-			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
-			return True
-
-		if self.extracted_metadata.filament_names is None:
-			self.error_body.append("No filament weight requirements in file metadata, skipping weight check")
+		if self.extracted_metadata.referenced_tools is None:
+			self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
 			return False
-
-		if self.multi_tool_mapping:
-			tool_range = range(len(self.multi_tool_mapping))
-		else:
-			if self.extracted_metadata.referenced_tools is None:
-				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
-				return False
-			elif len(self.extracted_metadata.referenced_tools) == 0:
-				self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming onyl T0 usage.")
-				return False
-			elif len(self.extracted_metadata.referenced_tools) > 1:
-				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
-				return False
-			tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
+		elif len(self.extracted_metadata.referenced_tools) == 0:
+			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
+			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
+		elif len(self.extracted_metadata.referenced_tools) > 1:
+			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+			return False
+		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
 		check_passed = True
 
 		for tool_index in tool_range:
-			if self.multi_tool_mapping:
-				current_spool_id = self.multi_tool_mapping[tool_index]
-				self.cached_spool_info = await self._fetch_spool_info(current_spool_id)
-				if self.cached_spool_info is None:
-					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {current_spool_id})")
-					return False
-			else:
-				current_spool_id = spool_id
+			current_spool_id = virtual_tool_map.get_spoolid_for_tool(tool_index)
+			if current_spool_id == -1 or current_spool_id is None:
+				self.error_body.append(f"No active spool for tool index {tool_index} (referenced by current file)")
+				return False
+			spool_info = virtual_tool_map.get_spool_info_for_tool(tool_index)
 
 			# Get spool filament name
-			filament = self.cached_spool_info.get('filament', {})
+			filament = spool_info.get('filament', {})
 			spool_filament_name = filament.get('name', '').strip()
 
 			if not spool_filament_name:
@@ -633,7 +702,7 @@ class AdditionalPrePrintChecks:
 
 		return check_passed
 
-	async def check_spool_change_work_hours(self, filename: str) -> bool:
+	async def check_spool_change_work_hours(self, virtual_tool_map : VirtualToolMap, filename: str) -> bool:
 		"""
 		Check if spool changes are within allowed work hours based on metadata and current time.
 
@@ -643,53 +712,42 @@ class AdditionalPrePrintChecks:
 		Returns:
 			True if spool change is within allowed work hours, False otherwise.
 		"""
-		if not self.spoolman or not self.enable_spool_change_on_work_hours_check:
-			return True
-
-		# Get active spool and initialize data
-		spool_id = await self._init_spool()
-		if spool_id is None and not self.multi_tool_mapping:
-			await self._log_to_console("No active spool set or cannot fetch spool info, skipping filament name check", "info")
+		if not self.enable_spool_change_on_work_hours_check:
 			return True
 
 		if self.extracted_metadata.extrusion_sample_points is None:
+			await self._log_to_console("No extrusion sample points found in metadata, skipping spool change work hours check", "warning")
 			return False
 
-		if self.multi_tool_mapping:
-			tool_range = range(len(self.multi_tool_mapping))
-		else:
-			if self.extracted_metadata.referenced_tools is None:
-				self.error_body.append("A referenced tool index is required in file metadata for (single-spool) spool runout check, but not found. Skipping spool change estimation.", "error")
-				return False
-			elif len(self.extracted_metadata.referenced_tools) == 0:
-				self.error_body.append("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) spool runout check. Skipping spool change estimation.", "warning")
-				return False
-			elif len(self.extracted_metadata.referenced_tools) > 1:
-				self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool spool runout check. Skipping spool change estimation.", "error")
-				return False
-			tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
+		if self.extracted_metadata.referenced_tools is None:
+			self.error_body.append("A referenced tool index is required in file metadata for (single-spool) weight check, but not found. Skipping weight check.")
+			return False
+		elif len(self.extracted_metadata.referenced_tools) == 0:
+			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
+			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
+		elif len(self.extracted_metadata.referenced_tools) > 1:
+			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+			return False
+		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
 		check_passed = True
 
 		for tool_index in tool_range:
-			if self.multi_tool_mapping:
-				current_spool_id = self.multi_tool_mapping[tool_index]
-				self.cached_spool_info = await self._fetch_spool_info(current_spool_id)
-				if self.cached_spool_info is None:
-					self.error_body.append(f"Cannot fetch spool info for tool {tool_index} (spool ID {current_spool_id})")
-					return False
-			else:
-				current_spool_id = spool_id
+			current_spool_id = virtual_tool_map.get_spoolid_for_tool(tool_index)
+			if current_spool_id == -1 or current_spool_id is None:
+				self.error_body.append(f"No active spool for tool index {tool_index} (referenced by current file)")
+				return False
+			spool_info = virtual_tool_map.get_spool_info_for_tool(tool_index)
 
 			# Get spool filament name
-			filament = self.cached_spool_info.get('filament', {})
+			filament = spool_info.get('filament', {})
 			spool_filament_name = filament.get('name', '').strip()
 
 			density = filament.get('density', None)
 			if density is None:
 				await self._log_to_console(f"Spool {current_spool_id} has no filament density data, skipping check", "info")
 				continue
-			remaining_weight = self.cached_spool_info.get('remaining_weight', None)
+			remaining_weight = spool_info.get('remaining_weight', None)
 			if remaining_weight is None:
 				await self._log_to_console(f"Spool {current_spool_id} has no remaining weight data, skipping check", "info")
 				continue
@@ -786,7 +844,7 @@ class AdditionalPrePrintChecks:
 			return False, asyncio.get_event_loop().time() - start_time
 		return True, asyncio.get_event_loop().time() - start_time
 
-	async def _prep_checks(self, tool_gate_map=None) -> None:
+	async def _prep_checks(self, tool_gate_map=None, referenced_tools=None) -> bool | VirtualToolMap:
 		'''
 		Prepare the environment for running pre-print checks.
 		This includes verifying the availability of required components,
@@ -796,23 +854,17 @@ class AdditionalPrePrintChecks:
 			self.error_body.append(f"[{self.config.get_name()}]: uboe_metadata component is required for Additional Pre-Print Checks plugin, but not found.")
 			return False
 
-		if tool_gate_map is not None:
-			if self.is_hh:
-				logging.warning("Tool gate map provided but HH mode is enabled, ignoring tool gate map")
-			else:
-				self.multi_tool_mapping = tool_gate_map
-
-		if self.is_hh:
-			self.multi_tool_mapping = []
-			ttg = self.mmu_server.mmu_backend_config["mmu"]["ttg_map"]
-			gate_spool_id = self.mmu_server.mmu_backend_config["mmu"]["gate_spool_id"]
-			for tool, tool_data in self.mmu_server.mmu_backend_config["mmu"]["slicer_tool_map"]["tools"].items():
-				logging.debug(f"Detected tool {tool} in slicer_tool_map: {tool_data}")
-				self.multi_tool_mapping.append(gate_spool_id[ttg[int(tool)]])
-
 		if not self.spoolman:
 			logging.warning("Spoolman component not available, skipping checks")
 			self.error_body.append("Pre-print checks skipped: Spoolman not available")
+			return False
+
+		virtual_tool_map = VirtualToolMap(self, tool_gate_map)
+		await virtual_tool_map.build()
+		await virtual_tool_map.fetch_tool_mapping_spool_info()
+		if len(virtual_tool_map.tool_to_spoolid_mapping) == 0:
+			logging.warning("No spools mapped to tools, skipping checks")
+			self.error_body.append("Pre-print checks skipped: No spools mapped to tools")
 			return False
 
 		# Get current filename from Klipper
@@ -822,25 +874,23 @@ class AdditionalPrePrintChecks:
 			self.error_body.append("Pre-print checks skipped: No filename available")
 			return False
 
-		# Clear cache at start of check session
-		self._clear_spool_cache()
-
 		_nb_errors = len(self.error_body)
 		self.extracted_metadata = ExtractedMetadata(self.metadata_storage, self.filename, self.error_body)
+		if referenced_tools is not None:
+			logging.info(f"Referenced tools forced through GCODE CALL for pre-print checks: {referenced_tools}")
+			self.extracted_metadata.referenced_tools = referenced_tools
 		# wait for valid uboe metadata enrichment
 		processed, elapsed_time = await self._wait_for_processed_by_uboe()
-		if not processed:
-			return False
-		else :
+		if processed:
 			logging.info(f"uboe_metadata has valid extrusion sample points. (Found in {elapsed_time:.2f} seconds)")
 
 		if len(self.error_body) > _nb_errors:
 			logging.error(f"Errors found during preparation checks: {self.error_body[_nb_errors:]}")
 			return False
 
-		return True
+		return virtual_tool_map
 
-	async def run_checks(self, tool_gate_map=None) -> None:
+	async def run_checks(self, tool_gate_map=None, referenced_tools=None) -> None:
 		"""
 		Run all enabled pre-print checks on the current print file.
 		Auto-detects MMU mode and runs appropriate checks.
@@ -858,33 +908,25 @@ class AdditionalPrePrintChecks:
 			detail = " "
 			if self.is_hh:
 				detail = " (HH mode enabled) "
-			pre_checks_ok = await self._prep_checks(tool_gate_map)
-			logging.info(f"multi_tool_mapping: {self.multi_tool_mapping}")
+			virtual_tool_map = await self._prep_checks(tool_gate_map, referenced_tools)
 
-			mode = "Multi-tool" if self.multi_tool_mapping else "Single-spool"
-			logging.info(f"Running {mode} pre-print checks{detail}for file: {self.filename}")
-			await self._log_to_console(f"Running {mode} checks for: {self.filename}", "info")
-
-			# #######################################
-			# Run the checks
-			# #######################################
-			# if self.is_hh:
-			# 	await self._log_to_console("Pre-print checks skipped: Redundant with HH consistency checks", "warning")
-			# 	return
 			try:
-				if pre_checks_ok:
+				if virtual_tool_map:
+					mode = "Multi-tool" if virtual_tool_map.multi else "Single-spool"
+					logging.info(f"Running {mode} pre-print checks{detail}for file: {self.filename}")
+					await self._log_to_console(f"Running {mode} checks for: {self.filename}", "info")
 					# Single-spool mode: check active spool
 					if self.enable_weight_check:
-						weight_ok = await self.check_print_weight(self.filename)
+						weight_ok = await self.check_print_weight(virtual_tool_map, self.filename)
 					else:
 						weight_ok = True
 					if self.enable_spool_change_on_work_hours_check:
-						spool_change_ok = await self.check_spool_change_work_hours(self.filename)
+						spool_change_ok = await self.check_spool_change_work_hours(virtual_tool_map, self.filename)
 					else:
 						spool_change_ok = True
 					# material_ok = await self.check_material_compliance(self.filename)
 					if self.enable_filament_name_check:
-						filament_name_ok = await self.check_filament_name_compliance(self.filename)
+						filament_name_ok = await self.check_filament_name_compliance(virtual_tool_map, self.filename)
 					else:
 						filament_name_ok = True
 
@@ -914,6 +956,8 @@ class AdditionalPrePrintChecks:
 						await self.klippy_apis.pause_print()
 					except Exception as e:
 						logging.error(f"Failed to pause print: {e}")
+					# remove duplicate error messages
+					self.error_body = list(dict.fromkeys(self.error_body))
 					logging.error(f'Errors : {self.error_body}')
 					await self._log_to_console(msg=(".\n".join(self.error_body)), reason="Pre-Print Check Failed", severity="error", popup=True)
 			finally:
@@ -922,13 +966,14 @@ class AdditionalPrePrintChecks:
 				self.error_body = []
 				self.spool_runouts = None
 		except Exception as e:
-			msg = f"Unexpected error during pre-print checks: {e}"
+			msg = f"Unexpected error during pre-print checks: {e}.\n See moonraker.log for traceback."
 			logging.error(msg)
 			try:
 				await self.klippy_apis.pause_print()
 			except Exception as e:
 				logging.error(f"Failed to pause print: {e}")
 			await self._log_to_console(msg=msg, reason="Pre-Print Check Failed", severity="error", popup=True)
+			raise e
 
 def load_component(config: ConfigHelper) -> AdditionalPrePrintChecks:
 	return AdditionalPrePrintChecks(config)
