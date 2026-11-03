@@ -34,11 +34,10 @@ class SpoolChangeEstimator:
 
 		self.printing = False
 		self._current_extr = None
-		# the id should follow the current extruder number and be updated when the current extruder changes
-		self._current_extr_id = int(self._current_extr.replace("extruder", "") if self._current_extr and self._current_extr.replace("extruder", "") else 0)
+		self._current_extr_id = 0
 
 		self._highest_epos = {}
-		self.cumulated_length = []
+		self.cumulated_length: Dict[int, float] = {}
 
 		self._prep_checks_ok = False
 		self.klippy_apis: APIComp = self.server.lookup_component("klippy_apis")
@@ -62,6 +61,9 @@ class SpoolChangeEstimator:
 		)
 		toolhead = result.get("toolhead", {})
 		self._current_extr = toolhead.get("extruder")
+		extr_id = self._get_extruder_id(self._current_extr)
+		if extr_id is not None:
+			self._current_extr_id = extr_id
 		initial_e_pos = toolhead.get("position", [None]*4)[3]
 		logging.debug(f"Initial epos: {initial_e_pos}")
 		if initial_e_pos is not None:
@@ -85,7 +87,8 @@ class SpoolChangeEstimator:
 			self._prep_checks_ok = await self.additional_pre_print_checks._prep_checks()
 			if self._prep_checks_ok:
 				logging.debug(f"Preparation checks passed. {self.additional_pre_print_checks.extracted_metadata.referenced_tools} referenced tools found.")
-				self.cumulated_length = [0]*len(self.additional_pre_print_checks.extracted_metadata.referenced_tools)
+				referenced_tools = self.additional_pre_print_checks.extracted_metadata.referenced_tools or []
+				self.cumulated_length = {tool_id: 0.0 for tool_id in referenced_tools}
 		return self._prep_checks_ok
 
 	async def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
@@ -132,9 +135,20 @@ class SpoolChangeEstimator:
 		Callback for when a print ends. In this case reset the extruder length
 		consumption reactor.
 		'''
-		self.cumulated_length = []
+		self.cumulated_length = {}
 		self._highest_epos = {}
 		self._prep_checks_ok = False
+
+	@staticmethod
+	def _get_extruder_id(extr: Optional[str]) -> Optional[int]:
+		if extr == "extruder":
+			return 0
+		if extr is not None and extr.startswith("extruder"):
+			extr_id = extr[len("extruder"):]
+			if extr_id.isdigit():
+				return int(extr_id)
+		logging.error(f"Unable to determine extruder ID from {extr}")
+		return None
 
 	async def _handle_status_update(self, status: Dict[str, Any], _: float) -> None:
 		if not self.printing:
@@ -143,6 +157,11 @@ class SpoolChangeEstimator:
 		if toolhead is None:
 			return
 		extr = toolhead.get("extruder", self._current_extr)
+		extr_id = self._get_extruder_id(extr)
+		if extr_id is None:
+			return
+		self._current_extr = extr
+		self._current_extr_id = extr_id
 		# add current extruder to the watchlist if not already present
 		if not extr in self._highest_epos:
 			self._highest_epos[extr] = 0
@@ -150,8 +169,14 @@ class SpoolChangeEstimator:
 		epos: float = toolhead.get("position", [0, 0, 0, self._highest_epos.get(extr)])[3]
 		logging.debug(f"Status update received while printing. Current extruder: {extr}, position: {epos}")
 		if epos > self._highest_epos.get(extr, 0):
-			self.cumulated_length[self._current_extr_id] = (self.cumulated_length[self._current_extr_id] ) + (epos - self._highest_epos.get(extr, 0))
+			extrusion_delta = epos - self._highest_epos.get(extr, 0)
 			self._highest_epos[extr] = epos
+			if not self._prep_checks_ok:
+				return
+			if extr_id not in self.cumulated_length:
+				logging.debug(f"Skipping spool estimate for unreferenced extruder {extr_id}")
+				return
+			self.cumulated_length[extr_id] += extrusion_delta
 			if self.cumulated_length[self._current_extr_id] >= self.trigger_distance:
 				logging.info(f"Triggering spool change estimate for extruder {extr}")
 				await self.cmd_UBOE_SPOOL_CHANGE_ESTIMATE()
