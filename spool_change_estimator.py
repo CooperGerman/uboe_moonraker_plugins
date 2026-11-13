@@ -208,8 +208,11 @@ class SpoolChangeEstimator:
 		current_remaining_g = current_spool.get("remaining_weight")
 		density = current_spool.get("filament").get("density")
 		spool_size_g = current_spool.get("filament").get("weight")
-		if not all([current_remaining_g, density, spool_size_g]):
+		if any(x is None for x in [current_remaining_g, density, spool_size_g]):
 			await self._log_to_console(f"Spool info is incomplete for spool ID {spool_id}. Cannot estimate spool change.", "error")
+			return
+		if current_remaining_g == 0:
+			await self._log_to_console(f"Spool {spool_id} is considered empty. Cannot estimate spool change.", "error")
 			return
 
 		# start sample point for estimation (get from volume and extr_id associated to sample point)
