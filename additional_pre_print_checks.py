@@ -94,7 +94,7 @@ class VirtualToolMap():
 	async def fetch_tool_mapping_spool_info(self):
 		'''
 		Fetches the spool information for the current tool mapping.
-  		'''
+		'''
 		self.tool_spoolid_info = []
 		for spool_id in self.tool_to_spoolid_mapping:
 			spool_info = await self.checks._fetch_spool_info(spool_id)
