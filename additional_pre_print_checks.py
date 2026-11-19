@@ -90,6 +90,7 @@ class VirtualToolMap():
 				self.tool_to_gate_mapping.append(i)
 
 		self.multi = len(self.tool_to_spoolid_mapping) > 1
+		self.nb_tools = len(self.tool_to_gate_mapping)
 
 	async def fetch_tool_mapping_spool_info(self):
 		'''
@@ -589,8 +590,8 @@ class AdditionalPrePrintChecks:
 		elif len(self.extracted_metadata.referenced_tools) == 0:
 			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
 			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
-		elif len(self.extracted_metadata.referenced_tools) > 1:
-			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+		elif len(self.extracted_metadata.referenced_tools) > virtual_tool_map.nb_tools:
+			self.error_body.append("More tools are referenced in the gcode than available in the virtual tool map. Skipping weight check.")
 			return False
 		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
@@ -653,8 +654,8 @@ class AdditionalPrePrintChecks:
 		elif len(self.extracted_metadata.referenced_tools) == 0:
 			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
 			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
-		elif len(self.extracted_metadata.referenced_tools) > 1:
-			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+		elif len(self.extracted_metadata.referenced_tools) > virtual_tool_map.nb_tools:
+			self.error_body.append("More tools are referenced in the gcode than available in the virtual tool map. Skipping weight check.")
 			return False
 		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
@@ -721,8 +722,8 @@ class AdditionalPrePrintChecks:
 		elif len(self.extracted_metadata.referenced_tools) == 0:
 			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
 			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
-		elif len(self.extracted_metadata.referenced_tools) > 1:
-			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+		elif len(self.extracted_metadata.referenced_tools) > virtual_tool_map.nb_tools:
+			self.error_body.append("More tools are referenced in the gcode than available in the virtual tool map. Skipping weight check.")
 			return False
 		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
@@ -789,8 +790,8 @@ class AdditionalPrePrintChecks:
 		elif len(self.extracted_metadata.referenced_tools) == 0:
 			await self._log_to_console("Referenced tool index list in file metadata is empty but a tool index is required for (single-spool) weight check. Assuming only T0 usage.")
 			self.extracted_metadata.referenced_tools = [0]  # Assume only T0 usage
-		elif len(self.extracted_metadata.referenced_tools) > 1:
-			self.error_body.append("Multiple referenced tools found in file metadata but only one is supported for single-spool weight check. Skipping weight check.")
+		elif len(self.extracted_metadata.referenced_tools) > virtual_tool_map.nb_tools:
+			self.error_body.append("More tools are referenced in the gcode than available in the virtual tool map. Skipping weight check.")
 			return False
 		tool_range = self.extracted_metadata.referenced_tools  # Single tool TN (where N is the tool index)
 
@@ -851,8 +852,8 @@ class AdditionalPrePrintChecks:
 			if int(spool_mmu_gate) != expected_gate:
 				check_passed = False
 				if self.spoolman_bad_severity == 'error':
-					self.error_body.append(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for tool index is `{tool_index}` is `{expected_gate}`")
-				await self._log_to_console(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for tool index is `{tool_index}` is `{expected_gate}`", self.spoolman_bad_severity)
+					self.error_body.append(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for this tool is `{tool_index}`")
+				await self._log_to_console(f"Spool {current_spool_id} is assigned to MMU gate `{spool_mmu_gate}` but the actual expected gate for this tool is `{tool_index}`", self.spoolman_bad_severity)
 
 			if check_passed:
 				msg = f"Spoolman setup check Check PASSED: Spool {current_spool_id} name and gate match"
