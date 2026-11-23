@@ -38,6 +38,8 @@ Run all enabled pre-print checks on the current print file.
 - Automatically retrieves the current filename from Klipper
 - Pauses the print if any check fails with error severity
 - No parameters or return values needed
+- The spool-change estimator starts tracking after these checks successfully prepare
+  the print metadata; it does not prepare the checks at job start.
 
 ```gcode
 { action_call_remote_method("pre_print_checks") }

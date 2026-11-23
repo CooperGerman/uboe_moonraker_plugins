@@ -33,6 +33,7 @@ class SpoolChangeEstimator:
 		self.trigger_distance : float = config.getfloat("trigger_distance", default=5, minval=0.05)*1000.0
 
 		self.printing = False
+		self._job_active = False
 		self._current_extr = None
 		self._current_extr_id = 0
 
@@ -53,6 +54,8 @@ class SpoolChangeEstimator:
 		)
 		self.server.register_event_handler(
 			"job_state:state_changed", self._on_job_state_changed)
+		self.server.register_event_handler(
+			"additional_pre_print_checks:prepared", self._on_checks_prepared)
 
 	async def _handle_klippy_ready(self) -> None:
 		result: Dict[str, Dict[str, Any]]
@@ -82,14 +85,15 @@ class SpoolChangeEstimator:
 			logging.error("Unable to determine current print state during klippy ready initialization")
 			raise self.server.error("Unable to determine current print state during klippy ready initialization")
 
-	async def ensure_prep_checks(self) -> bool:
-		if not self._prep_checks_ok:
-			self._prep_checks_ok = await self.additional_pre_print_checks._prep_checks()
-			if self._prep_checks_ok:
-				logging.debug(f"Preparation checks passed. {self.additional_pre_print_checks.extracted_metadata.referenced_tools} referenced tools found.")
-				referenced_tools = self.additional_pre_print_checks.extracted_metadata.referenced_tools or []
-				self.cumulated_length = {tool_id: 0.0 for tool_id in referenced_tools}
-		return self._prep_checks_ok
+	def _on_checks_prepared(self, referenced_tools: List[int]) -> None:
+		if not self._job_active:
+			return
+		self.cumulated_length = {
+			tool_id: self.cumulated_length.get(tool_id, 0.0)
+			for tool_id in referenced_tools
+		}
+		self._prep_checks_ok = True
+		logging.info("Spool change estimator initialized after pre-print checks")
 
 	async def _on_job_state_changed(self, job_event: JobEvent, *args) -> None:
 		callback: Optional[Callable] = getattr(self, f"_on_print_{job_event}", None)
@@ -127,10 +131,11 @@ class SpoolChangeEstimator:
 		X meters of filament consumed.
 		'''
 		self.printing = True
-		await self.ensure_prep_checks()
+		self._job_active = True
 
 	async def _on_print_end(self, *args) -> None:
 		self.printing = False
+		self._job_active = False
 		'''
 		Callback for when a print ends. In this case reset the extruder length
 		consumption reactor.
@@ -187,6 +192,9 @@ class SpoolChangeEstimator:
 		if not self.printing:
 			await self._log_to_console(f"No print is currently active. Cannot estimate spool change.", "warning")
 			return
+		if not self._prep_checks_ok:
+			await self._log_to_console("Pre-print checks have not prepared the spool change estimator.", "warning")
+			return
 		# cast args to correct types directly
 		extr_id = self._current_extr_id
 		# calc volume from length knowing the filament is 1.75mm in diameter
@@ -216,8 +224,6 @@ class SpoolChangeEstimator:
 			return
 
 		# start sample point for estimation (get from volume and extr_id associated to sample point)
-		if not self.additional_pre_print_checks.extracted_metadata:
-			await self.ensure_prep_checks()
 		if not self.additional_pre_print_checks.extracted_metadata:
 			await self._log_to_console("No extracted metadata found. Cannot estimate spool change.", "error")
 			return

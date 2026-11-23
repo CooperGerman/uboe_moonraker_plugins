@@ -1053,6 +1053,11 @@ class AdditionalPrePrintChecks:
 				self._clear_spool_cache()
 				self.error_body = []
 				self.spool_runouts = None
+			if virtual_tool_map:
+				await self.server.send_event(
+					"additional_pre_print_checks:prepared",
+					self.extracted_metadata.referenced_tools or [],
+				)
 		except Exception as e:
 			msg = f"Unexpected error during pre-print checks: {e}.\n See moonraker.log for traceback."
 			logging.error(msg)
