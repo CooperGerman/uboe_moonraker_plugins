@@ -48,8 +48,9 @@ class VirtualToolMap():
 		# self.tool_to_spoolid = [v for v in self.tool_to_spoolid if v != -1] if self.tool_to_spoolid is not None else None
 		self.tool_to_spoolid_mapping = []
 		# tool to gate map naively is the tool index itself but in
-  		# the case of HH overwrite it with those
+		# the case of HH overwrite it with those
 		self.tool_to_gate_mapping = []
+		self.nb_tools = 0
 		self.multi = None
 
 	async def build(self):
@@ -73,6 +74,7 @@ class VirtualToolMap():
 
 		# Spool_ids given by the HH slicer tool mapping
 		if self.checks.is_hh:
+			# add a hook here for HH ttg mapping to be done. (either auto ttg or ttg static at start)
 			self.tool_to_spoolid_mapping = []
 			self.tool_to_gate_mapping = []
 			ttg = self.checks.mmu_server.mmu_backend_config["mmu"]["ttg_map"]
@@ -940,7 +942,7 @@ class AdditionalPrePrintChecks:
 		virtual_tool_map = VirtualToolMap(self, tool_gate_map)
 		await virtual_tool_map.build()
 		await virtual_tool_map.fetch_tool_mapping_spool_info()
-		if len(virtual_tool_map.tool_to_spoolid_mapping) == 0:
+		if virtual_tool_map.nb_tools == 0:
 			logging.warning("No spools mapped to tools, skipping checks")
 			self.error_body.append("Pre-print checks skipped: No spools mapped to tools")
 			return False
